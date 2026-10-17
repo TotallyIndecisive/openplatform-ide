@@ -1,6 +1,6 @@
-# ESP32 IDE (Tauri + React)
+# Openplatform IDE (Tauri + React)
 
-A lightweight, fast cross-platform IDE for ESP32 development. It focuses on simple device recognition, code editing, compiling, and uploading to ESP32 boards.
+A lightweight, fast cross-platform IDE for Arduino and ESP32 development. It focuses on simple device recognition, code editing, compiling, and uploading to ESP32 boards.
 
 ## Features
 - ESP32 board detection (manual port selection)

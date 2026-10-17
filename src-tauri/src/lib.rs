@@ -11,7 +11,7 @@ use tauri::Emitter;
 const CLI: &str =
     "/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli";
 /// Our dedicated CLI config/data dir. Keeps the user's `~/Library/Arduino15` untouched.
-const CFG: &str = "/Users/smckenzie/.esp32-ide/arduino-cli.yaml";
+const CFG: &str = "/Users/smckenzie/.openplatform-ide/arduino-cli.yaml";
 
 // ---------------------------------------------------------------- helpers ---
 
@@ -25,7 +25,7 @@ fn esptool_bin() -> Option<String> {
     ESPTOOL_BIN_CACHE
         .get_or_init(|| {
             let base = PathBuf::from(home())
-                .join(".esp32-ide/Arduino15/packages/esp32/tools/esptool_py");
+                .join(".openplatform-ide/Arduino15/packages/esp32/tools/esptool_py");
             let entries = std::fs::read_dir(&base).ok()?;
             for e in entries.flatten() {
                 let d = e.path();
@@ -279,7 +279,7 @@ struct AppPaths {
 fn app_paths() -> AppPaths {
     let home = home();
     AppPaths {
-        sketch_dir: format!("{home}/.esp32-ide/Arduino"),
+        sketch_dir: format!("{home}/.openplatform-ide/Arduino"),
         esptool: esptool_bin(),
         home,
     }

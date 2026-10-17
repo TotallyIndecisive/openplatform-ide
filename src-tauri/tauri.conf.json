@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "esp32-ide",
+  "productName": "openplatform-ide",
   "version": "0.1.0",
-  "identifier": "com.smckenzie.esp32-ide",
+  "identifier": "com.smckenzie.openplatform-ide",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "esp32-ide",
+        "title": "openplatform-ide",
         "width": 800,
         "height": 600
       }

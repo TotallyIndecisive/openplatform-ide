@@ -324,7 +324,7 @@ export default function App() {
   return (
     <div className="wrap">
       <header>
-        <span className="brand">esp32-ide</span>
+        <span className="brand">openplatform-ide</span>
         <span className="sub">Tauri 2 · React · TS — Arduino-IDE-style</span>
         <div className="actions">
           <button onClick={scan}>⟳ Refresh ports</button>
