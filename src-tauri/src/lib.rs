@@ -285,15 +285,18 @@ fn app_paths() -> AppPaths {
     }
 }
 
-/// Persist the editor buffer as a real Arduino sketch folder
-/// (`<sketch_dir>/<main_name>.ino`) so `arduino-cli` can compile it.
+/// Write PlatformIO project files (platformio.ini + src/main.cpp)
 #[tauri::command]
-fn write_sketch(sketch_dir: String, main_name: String, content: String) -> Result<String, String> {
-    let dir = PathBuf::from(&sketch_dir);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
-    let base = main_name.trim_end_matches(".ino");
-    let file = dir.join(format!("{base}.ino"));
-    std::fs::write(&file, content).map_err(|e| format!("write: {e}"))?;
+fn write_pio_project(
+    project_dir: String,
+    platformio_ini: String,
+    src_content: String,
+) -> Result<String, String> {
+    let dir = PathBuf::from(&project_dir);
+    let src_dir = dir.join("src");
+    std::fs::create_dir_all(&src_dir).map_err(|e| format!("mkdir: {e}"))?;
+    std::fs::write(dir.join("platformio.ini"), platformio_ini).map_err(|e| format!("write ini: {e}"))?;
+    std::fs::write(src_dir.join("main.cpp"), src_content).map_err(|e| format!("write src: {e}"))?;
     Ok(dir.to_string_lossy().to_string())
 }
 
@@ -402,7 +405,7 @@ pub fn run() {
             cli_start,
             open_in_vscode,
             app_paths,
-            write_sketch,
+            write_pio_project,
             serial_start,
             serial_stop
         ])
