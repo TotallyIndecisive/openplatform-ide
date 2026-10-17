@@ -188,9 +188,8 @@ export default function App() {
       const paths = await invoke<{ projectDir: string }>("app_paths");
       const dir = await invoke<string>("write_pio_project", {
         projectDir: paths.projectDir,
-        srcName: "main.cpp",
-        platformioIni: ini,
-        srcContent: src,
+        platformio_ini: ini,
+        src_content: src,
       });
       (dir);
       return dir;
