@@ -12,29 +12,9 @@ import "./App.css";
 };
 loader.config({ monaco });
 
-const DEFAULT_SKETCH = `// ESP32 Blink — esp32:esp32:esp32 (ESP32 Dev Module)
-// Uses millis() instead of delay()
-const int LED_PIN = 23;
-unsigned long prev = 0;
-const unsigned long interval = 5000; // 5 seconds
-bool state = false;
+const DEFAULT_PIO_INI = `[env:esp32dev]\nplatform = espressif32\nboard = esp32dev\nframework = arduino\nmonitor_speed = 115200\nupload_speed = 921600\n`;
 
-void setup() {
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
-  Serial.begin(115200);
-}
-
-void loop() {
-  unsigned long now = millis();
-  if (now - prev >= interval) {
-    prev = now;
-    state = !state;
-    digitalWrite(LED_PIN, state ? HIGH : LOW);
-    Serial.println(state ? "on" : "off");
-  }
-}
-`;
+const DEFAULT_SRC = `#include <Arduino.h>\n\n#define LED_PIN 23\n\nunsigned long previousMillis = 0;\nconst unsigned long interval = 1000; // 1 second\nbool ledState = false;\n\nvoid setup() {\n  pinMode(LED_PIN, OUTPUT);\n  digitalWrite(LED_PIN, LOW);\n  Serial.begin(115200);\n}\n\nvoid loop() {\n  unsigned long currentMillis = millis();\n  if (currentMillis - previousMillis >= interval) {\n    previousMillis = currentMillis;\n    ledState = !ledState;\n    digitalWrite(LED_PIN, ledState ? HIGH : LOW);\n    Serial.println(ledState ? "on" : "off");\n  }\n}\n`;
 
 type Port = {
   address: string;
