@@ -53,12 +53,13 @@ export default function App() {
   const [ports, setPorts] = useState<Port[]>([]);
   const [port, setPort] = useState("");
   const [chip, setChip] = useState<ChipInfo | null>(null);
-  const [sketch, setSketch] = useState(DEFAULT_SKETCH);
+  const [ini, setIni] = useState(DEFAULT_PIO_INI);
+  const [src, setSrc] = useState(DEFAULT_SRC);
   const [out, setOut] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [status, setStatus] = useState("");
-  const [sketchPath, setSketchPath] = useState("");
+  const [projectDir, setProjectDir] = useState("");
   const [serialOpen, setSerialOpen] = useState(false);
   const [serialText, setSerialText] = useState("");
   const [baud, setBaud] = useState(115200);
@@ -148,9 +149,9 @@ export default function App() {
       )
     );
     scan();
-    invoke<{ sketchDir: string; home: string; esptool?: string }>(
+    invoke<{ projectDir: string; home: string; esptool?: string }>(
       "app_paths"
-    ).then((p) => setSketchPath(`${p.sketchDir}/Blink`));
+    ).then((p) => setProjectDir(p.projectDir));
     return () => {
       Promise.all(offs).then((fs) => fs.forEach((f) => f()));
     };
@@ -184,13 +185,14 @@ export default function App() {
 
   async function save(): Promise<string | null> {
     try {
-      const paths = await invoke<{ sketchDir: string }>("app_paths");
-      const dir = await invoke<string>("write_sketch", {
-        sketchDir: `${paths.sketchDir}/Blink`,
-        mainName: "Blink",
-        content: sketch,
+      const paths = await invoke<{ projectDir: string }>("app_paths");
+      const dir = await invoke<string>("write_pio_project", {
+        projectDir: paths.projectDir,
+        srcName: "main.cpp",
+        platformioIni: ini,
+        srcContent: src,
       });
-      setSketchPath(dir);
+      (dir);
       return dir;
     } catch (e) {
       log(`save error: ${e}`);
@@ -231,7 +233,7 @@ export default function App() {
       `Verify (compile) ${dir}`
     );
     if (code === 0) {
-      const key = `${djb2(sketch)}|${FQBN}|${dir}`;
+      const key = `${djb2(src + "\n" + ini)}|pio|${dir}`;
       setLastCompiledKey(key);
       log("✓ Verify OK");
     } else {
@@ -244,7 +246,7 @@ export default function App() {
     if (busy || !port) return;
     const dir = await save();
     if (!dir) return;
-    const key = `${djb2(sketch)}|${FQBN}|${dir}`;
+    const key = `${djb2(src + "\n" + ini)}|pio|${dir}`;
     if (lastCompiledKey !== key) {
       const c = await runCli(
         ["compile", "--fqbn", FQBN, dir],
@@ -296,7 +298,7 @@ export default function App() {
   }
 
   function vscode() {
-    if (sketchPath) invoke("open_in_vscode", { path: sketchPath });
+    if (projectDir) invoke("open_in_vscode", { path: projectDir });
   }
 
   const usbPorts = ports.filter((p) => p.isUsb);
@@ -330,7 +332,7 @@ export default function App() {
               ? "working…"
               : "↑ Upload"}
           </button>
-          <button onClick={vscode} disabled={!sketchPath}>
+          <button onClick={vscode} disabled={!projectDir}>
             Open in VS Code
           </button>
         </div>
@@ -364,16 +366,34 @@ export default function App() {
 
       <main>
         <section className="editor">
+          <div className="path">platformio.ini</div>
+          <Editor
+            height="100%"
+            defaultLanguage="ini"
+            language="ini"
+            theme="vs-dark"
+            value={ini}
+            onChange={(v) => setIni(v ?? "")}
+            options={{
+              fontSize: 13,
+              minimap: { enabled: false },
+              wordWrap: "on",
+              automaticLayout: true,
+            }}
+          />
+        </section>
+
+        <section className="editor">
           <div className="path">
-            {sketchPath || "…"} <span className="hint">· Blink.ino</span>
+            {projectDir || "…"} <span className="hint">· src/main.cpp</span>
           </div>
           <Editor
             height="100%"
             defaultLanguage="cpp"
             language="cpp"
             theme="vs-dark"
-            value={sketch}
-            onChange={(v) => setSketch(v ?? "")}
+            value={src}
+            onChange={(v) => setSrc(v ?? "")}
             options={{
               fontSize: 13,
               minimap: { enabled: false },
