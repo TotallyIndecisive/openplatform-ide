@@ -184,12 +184,15 @@ export default function App() {
   }
 
   async function save(): Promise<string | null> {
+    if (!projectDir) {
+      log("save error: project directory not loaded yet");
+      return null;
+    }
     try {
-      const paths = await invoke<{ projectDir?: string; project_dir?: string; home: string }>("app_paths");
       const dir = await invoke<string>("write_pio_project", {
-        projectDir: (projectDir || paths.projectDir || paths.project_dir || `${paths.home}/.openplatform-ide/projects/BlinkPIO`),
-        platformio_ini: ini,
-        src_content: src,
+        projectDir,
+        platformioIni: ini,
+        srcContent: src,
       });
       (dir);
       return dir;

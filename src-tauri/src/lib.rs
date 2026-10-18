@@ -273,7 +273,6 @@ struct AppPaths {
     home: String,
     sketch_dir: String,
     project_dir: Option<String>,
-    projectDir: Option<String>,
     esptool: Option<String>,
 }
 
@@ -283,8 +282,7 @@ fn app_paths() -> AppPaths {
     let project_dir = format!("{home}/.openplatform-ide/projects/BlinkPIO");
     AppPaths {
         sketch_dir: format!("{home}/.openplatform-ide/Arduino"),
-        project_dir: Some(project_dir.clone()),
-        projectDir: Some(project_dir.clone()),
+        project_dir: Some(project_dir),
         esptool: esptool_bin(),
         home,
     }
