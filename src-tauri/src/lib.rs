@@ -273,7 +273,6 @@ struct AppPaths {
     home: String,
     sketch_dir: String,
     project_dir: Option<String>,
-    projectDir: Option<String>,
     esptool: Option<String>,
 }
 
@@ -283,20 +282,37 @@ fn app_paths() -> AppPaths {
     let project_dir = format!("{home}/.openplatform-ide/projects/BlinkPIO");
     AppPaths {
         sketch_dir: format!("{home}/.openplatform-ide/Arduino"),
-        project_dir: Some(project_dir.clone()),
-        projectDir: Some(project_dir.clone()),
+        project_dir: Some(project_dir),
         esptool: esptool_bin(),
         home,
     }
 }
 
 /// Write PlatformIO project files (platformio.ini + src/main.cpp)
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WritePio {
+    project_dir: Option<String>,
+    projectDir: Option<String>,
+    platformio_ini: Option<String>,
+    platformioIni: Option<String>,
+    src_content: Option<String>,
+    srcContent: Option<String>,
+}
+
 #[tauri::command]
 fn write_pio_project(
-    project_dir: String,
-    platformio_ini: String,
-    src_content: String,
+    project_dir: Option<String>,
+    projectDir: Option<String>,
+    platformio_ini: Option<String>,
+    platformioIni: Option<String>,
+    src_content: Option<String>,
+    srcContent: Option<String>,
 ) -> Result<String, String> {
+    let args = WritePio { project_dir, projectDir, platformio_ini, platformioIni, src_content, srcContent };
+    let project_dir = args.projectDir.or(args.project_dir).ok_or("missing projectDir")?;
+    let platformio_ini = args.platformioIni.or(args.platformio_ini).ok_or("missing platformioIni")?;
+    let src_content = args.srcContent.or(args.src_content).ok_or("missing srcContent")?;
     let dir = PathBuf::from(&project_dir);
     let src_dir = dir.join("src");
     std::fs::create_dir_all(&src_dir).map_err(|e| format!("mkdir: {e}"))?;
