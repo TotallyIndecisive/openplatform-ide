@@ -12,6 +12,7 @@ const CLI: &str =
     "/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli";
 /// Our dedicated CLI config/data dir. Keeps the user's `~/Library/Arduino15` untouched.
 const CFG: &str = "/Users/smckenzie/.openplatform-ide/arduino-cli.yaml";
+const PIO: &str = "/Users/smckenzie/.platformio/penv/bin/pio";
 
 // ---------------------------------------------------------------- helpers ---
 
@@ -218,15 +219,16 @@ struct CliExit {
 /// Returns as soon as the process is spawned — the `wait()` happens on a
 /// background thread, so a long compile/upload never freezes the webview.
 #[tauri::command]
-fn cli_start(app: tauri::AppHandle, args: Vec<String>) -> Result<(), String> {
-    let mut cmd = Command::new(CLI);
-    cmd.arg("--config-file")
-        .arg(CFG)
-        .args(&args)
+fn cli_start(app: tauri::AppHandle, cwd: Option<String>, args: Vec<String>) -> Result<(), String> {
+    let mut cmd = Command::new(PIO);
+    if let Some(ref d) = cwd {
+        cmd.current_dir(d);
+    }
+    cmd.args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|e| format!("spawn arduino-cli: {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| format!("spawn pio: {e}"))?;
     let stdout = child.stdout.take().ok_or("no stdout")?;
     let stderr = child.stderr.take().ok_or("no stderr")?;
 

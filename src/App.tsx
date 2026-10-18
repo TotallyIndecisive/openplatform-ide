@@ -205,6 +205,7 @@ export default function App() {
   /** Run one arduino-cli invocation; resolves with its exit code. */
   async function runCli(
     args: string[],
+    cwd: string,
     label: string,
     prefix?: string
   ): Promise<number | null> {
@@ -215,7 +216,7 @@ export default function App() {
     if (prefix) log(`\n--- ${prefix} ---`);
     const done = waitExit();
     try {
-      await invoke("cli_start", { args });
+      await invoke("cli_start", { cwd, args });
     } catch (e) {
       log(`${label} error: ${e}`);
       exitResolver.current = null;
@@ -230,9 +231,10 @@ export default function App() {
     const dir = await save();
     if (!dir) return;
     const code = await runCli(
-      ["compile", "--fqbn", FQBN, dir],
+      ["run"],
+      dir,
       "compiling",
-      `Verify (compile) ${dir}`
+      `Verify (build) ${dir}`
     );
     if (code === 0) {
       const key = `${djb2(src + "\n" + ini)}|pio|${dir}`;
@@ -251,7 +253,8 @@ export default function App() {
     const key = `${djb2(src + "\n" + ini)}|pio|${dir}`;
     if (lastCompiledKey !== key) {
       const c = await runCli(
-        ["compile", "--fqbn", FQBN, dir],
+        ["run"],
+        dir,
         "compiling",
         `Compile ${dir}`
       );
@@ -266,7 +269,8 @@ export default function App() {
       log("✓ Using cached build. Uploading…");
     }
     const u = await runCli(
-      ["upload", "-p", port, "--fqbn", FQBN, dir],
+      ["run", "-t", "upload", "--upload-port", port],
+      dir,
       "uploading",
       `Upload → ${port}`
     );
