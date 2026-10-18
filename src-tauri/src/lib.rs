@@ -19,6 +19,26 @@ const PIO: &str = "/Users/smckenzie/.platformio/penv/bin/pio";
 fn home() -> String {
     std::env::var("HOME").unwrap_or_else(|_| "/Users/smckenzie".into())
 }
+fn config_dir() -> String {
+    let h = home();
+    format!("{h}/.openplatform-ide")
+}
+fn recent_path() -> PathBuf {
+    PathBuf::from(config_dir()).join("recent.json")
+}
+fn load_recent() -> Vec<String> {
+    let p = recent_path();
+    if !p.exists() { return vec![]; }
+    let s = std::fs::read_to_string(p).unwrap_or_default();
+    serde_json::from_str(&s).unwrap_or_default()
+}
+fn save_recent(list: Vec<String>) -> Result<(), String> {
+    let p = recent_path();
+    std::fs::create_dir_all(p.parent().unwrap_or(&p)).map_err(|e| format!("mkdir: {e}"))?;
+    let c = serde_json::to_string_pretty(&list).map_err(|e| format!("json: {e}"))?;
+    std::fs::write(p, c).map_err(|e| format!("write: {e}"))?;
+    Ok(())
+}
 
 static ESPTOOL_BIN_CACHE: OnceLock<Option<String>> = OnceLock::new();
 
@@ -302,6 +322,30 @@ fn write_pio_project(
     std::fs::create_dir_all(&src_dir).map_err(|e| format!("mkdir: {e}"))?;
     std::fs::write(dir.join("platformio.ini"), platformio_ini).map_err(|e| format!("write ini: {e}"))?;
     std::fs::write(src_dir.join("main.cpp"), src_content).map_err(|e| format!("write src: {e}"))?;
+    let _ = add_recent(project_dir.clone());
+    Ok(dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn list_recent() -> Vec<String> {
+    load_recent()
+}
+#[tauri::command]
+fn add_recent(project_dir: String) -> Result<(), String> {
+    let mut list = load_recent();
+    list.retain(|x| x != &project_dir);
+    list.insert(0, project_dir);
+    if list.len() > 10 { list.truncate(10); }
+    save_recent(list)
+}
+#[tauri::command]
+fn create_new_project(project_dir: String, platformio_ini: String, src_content: String) -> Result<String, String> {
+    let dir = PathBuf::from(&project_dir);
+    let src_dir = dir.join("src");
+    std::fs::create_dir_all(&src_dir).map_err(|e| format!("mkdir: {e}"))?;
+    std::fs::write(dir.join("platformio.ini"), platformio_ini).map_err(|e| format!("write ini: {e}"))?;
+    std::fs::write(src_dir.join("main.cpp"), src_content).map_err(|e| format!("write src: {e}"))?;
+    let _ = add_recent(project_dir.clone());
     Ok(dir.to_string_lossy().to_string())
 }
 
@@ -390,6 +434,23 @@ fn serial_start(
     Ok(())
 }
 
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PioProject {
+    ini: String,
+    src: String,
+}
+
+#[tauri::command]
+fn load_pio_project(project_dir: String) -> Result<PioProject, String> {
+    let dir = PathBuf::from(&project_dir);
+    let ini_path = dir.join("platformio.ini");
+    let src_path = dir.join("src").join("main.cpp");
+    let ini = std::fs::read_to_string(&ini_path).map_err(|e| format!("read ini: {e}"))?;
+    let src = std::fs::read_to_string(&src_path).map_err(|e| format!("read src: {e}"))?;
+    Ok(PioProject { ini, src })
+}
 #[tauri::command]
 fn serial_stop(state: tauri::State<SerialState>) {
     if let Some(s) = state.stop.lock().unwrap().take() {
@@ -411,6 +472,10 @@ pub fn run() {
             open_in_vscode,
             app_paths,
             write_pio_project,
+            load_pio_project,
+            list_recent,
+            add_recent,
+            create_new_project,
             serial_start,
             serial_stop
         ])
