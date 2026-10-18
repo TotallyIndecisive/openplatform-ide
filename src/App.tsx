@@ -60,6 +60,7 @@ export default function App() {
   const [progress, setProgress] = useState<number | null>(null);
   const [status, setStatus] = useState("");
   const [projectDir, setProjectDir] = useState("");
+  const [home, setHome] = useState("");
   const [serialOpen, setSerialOpen] = useState(false);
   const [serialText, setSerialText] = useState("");
   const [baud, setBaud] = useState(115200);
@@ -149,9 +150,12 @@ export default function App() {
       )
     );
     scan();
-    invoke<{ projectDir: string; home: string; esptool?: string }>(
-      "app_paths"
-    ).then((p) => setProjectDir(p.projectDir));
+    invoke<{ projectDir?: string; home: string; esptool?: string }>("app_paths")
+      .then((p) => {
+        setHome(p.home);
+        setProjectDir(p.projectDir ?? `${p.home}/.openplatform-ide/projects/BlinkPIO`);
+      })
+      .catch((e) => log(`app_paths error: ${e}`));
     return () => {
       Promise.all(offs).then((fs) => fs.forEach((f) => f()));
     };
@@ -184,18 +188,20 @@ export default function App() {
   }
 
   async function save(): Promise<string | null> {
-    if (!projectDir) {
+    // Never send an undefined/empty projectDir — Tauri drops undefined keys,
+    // which surfaces as "missing required key projectDir".
+    const dir = projectDir || (home ? `${home}/.openplatform-ide/projects/BlinkPIO` : "");
+    if (!dir) {
       log("save error: project directory not loaded yet");
       return null;
     }
     try {
-      const dir = await invoke<string>("write_pio_project", {
-        projectDir,
+      const written = await invoke<string>("write_pio_project", {
+        projectDir: dir,
         platformioIni: ini,
         srcContent: src,
       });
-      (dir);
-      return dir;
+      return written;
     } catch (e) {
       log(`save error: ${e}`);
       return null;
