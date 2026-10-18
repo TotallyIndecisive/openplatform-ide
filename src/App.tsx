@@ -185,9 +185,9 @@ export default function App() {
 
   async function save(): Promise<string | null> {
     try {
-      const paths = await invoke<{ projectDir: string }>("app_paths");
+      const paths = await invoke<{ projectDir?: string; project_dir?: string; home: string }>("app_paths");
       const dir = await invoke<string>("write_pio_project", {
-        projectDir: paths.projectDir,
+        projectDir: (projectDir || paths.projectDir || paths.project_dir || `${paths.home}/.openplatform-ide/projects/BlinkPIO`),
         platformio_ini: ini,
         src_content: src,
       });
