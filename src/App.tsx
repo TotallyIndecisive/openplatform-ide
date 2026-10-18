@@ -61,6 +61,7 @@ export default function App() {
   const [status, setStatus] = useState("");
   const [projectDir, setProjectDir] = useState("");
   const [home, setHome] = useState("");
+  const [recents, setRecents] = useState<string[]>([]); void recents;
   const [serialOpen, setSerialOpen] = useState(false);
   const [serialText, setSerialText] = useState("");
   const [baud, setBaud] = useState(115200);
@@ -150,6 +151,7 @@ export default function App() {
       )
     );
     scan();
+    loadRecents();
     invoke<{ projectDir?: string; home: string; esptool?: string }>("app_paths")
       .then((p) => {
         setHome(p.home);
@@ -207,6 +209,29 @@ export default function App() {
       return null;
     }
   }
+
+  const loadProject = async (_dir: string) => { const dir=_dir; (window as any)._lp = loadProject; void 0;
+    try {
+      const p = await invoke<{ini:string, src:string}>("load_pio_project", { projectDir: dir });
+      setIni(p.ini);
+      setSrc(p.src);
+      setProjectDir(dir);
+      await invoke("add_recent", { projectDir: dir });
+      await loadRecents();
+      log(`Opened: ${dir}`);
+    } catch (e) {
+      log(`open error: ${e}`);
+    }
+  }
+
+  async function loadRecents() {
+    try {
+      const r = await invoke<string[]>("list_recent");
+      setRecents(r);
+    } catch (e) {
+      log(`list_recent error: ${e}`);
+    }
+  };
 
   /** Run one arduino-cli invocation; resolves with its exit code. */
   async function runCli(
