@@ -464,6 +464,7 @@ fn serial_stop(state: tauri::State<SerialState>) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(SerialState::default())
         .invoke_handler(tauri::generate_handler![
             list_serial_ports,

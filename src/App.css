@@ -29,6 +29,39 @@ header {
   flex-wrap: wrap;
 }
 
+/* --- File menu --- */
+.menu { position: relative; }
+.menu-btn { padding: 5px 12px; }
+.menu-backdrop { position: fixed; inset: 0; z-index: 9; }
+.menu-drop {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  min-width: 200px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.45);
+}
+.menu-drop button {
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+.menu-drop button:hover { background: #3a4045; }
+.menu-recent { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+.menu-label { color: var(--muted); font-size: 11px; padding: 4px 10px 2px; }
+
 .brand { font-weight: 700; color: var(--accent); letter-spacing: .5px; }
 .sub { color: var(--muted); font-size: 11px; }
 

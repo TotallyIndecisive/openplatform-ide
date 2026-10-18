@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { loader, Editor } from "@monaco-editor/react";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import * as monaco from "monaco-editor";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import "./App.css";
@@ -61,7 +62,8 @@ export default function App() {
   const [status, setStatus] = useState("");
   const [projectDir, setProjectDir] = useState("");
   const [home, setHome] = useState("");
-  const [recents, setRecents] = useState<string[]>([]); void recents;
+  const [recents, setRecents] = useState<string[]>([]);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [serialOpen, setSerialOpen] = useState(false);
   const [serialText, setSerialText] = useState("");
   const [baud, setBaud] = useState(115200);
@@ -210,17 +212,86 @@ export default function App() {
     }
   }
 
-  const loadProject = async (_dir: string) => { const dir=_dir; (window as any)._lp = loadProject; void 0;
+  async function loadProject(dir: string) {
     try {
-      const p = await invoke<{ini:string, src:string}>("load_pio_project", { projectDir: dir });
+      const p = await invoke<{ ini: string; src: string }>("load_pio_project", {
+        projectDir: dir,
+      });
       setIni(p.ini);
       setSrc(p.src);
       setProjectDir(dir);
+      setLastCompiledKey(null); // different project → invalidate build cache
       await invoke("add_recent", { projectDir: dir });
       await loadRecents();
-      log(`Opened: ${dir}`);
+      log(`Opened project: ${dir}`);
     } catch (e) {
       log(`open error: ${e}`);
+    }
+  }
+
+  /** File ▸ New Project — pick a folder, scaffold a PlatformIO project there. */
+  async function newProject() {
+    setMenuOpen(false);
+    const dest = await saveDialog({
+      title: "Create new PlatformIO project",
+      defaultPath: "MyProject",
+      canCreateDirectories: true,
+    });
+    if (!dest) return;
+    try {
+      const dir = await invoke<string>("create_new_project", {
+        projectDir: dest,
+        platformioIni: DEFAULT_PIO_INI,
+        srcContent: DEFAULT_SRC,
+      });
+      setIni(DEFAULT_PIO_INI);
+      setSrc(DEFAULT_SRC);
+      setProjectDir(dir);
+      setLastCompiledKey(null);
+      await loadRecents();
+      log(`Created project: ${dir}`);
+    } catch (e) {
+      log(`new project error: ${e}`);
+    }
+  }
+
+  /** File ▸ Open Project — browse to a folder (or its platformio.ini) and load it. */
+  async function openProject() {
+    setMenuOpen(false);
+    const picked = await openDialog({
+      title: "Open PlatformIO project",
+      directory: true,
+      multiple: false,
+    });
+    if (typeof picked !== "string") return;
+    // Allow selecting the platformio.ini itself as well as the project folder.
+    const dir = picked.endsWith("platformio.ini")
+      ? picked.slice(0, -"platformio.ini".length).replace(/\/$/, "")
+      : picked;
+    await loadProject(dir);
+  }
+
+  /** File ▸ Save As — write the current project to a new chosen location. */
+  async function saveAs() {
+    setMenuOpen(false);
+    const dest = await saveDialog({
+      title: "Save project as (choose target folder)",
+      defaultPath: "MyProject",
+      canCreateDirectories: true,
+    });
+    if (!dest) return;
+    try {
+      const dir = await invoke<string>("write_pio_project", {
+        projectDir: dest,
+        platformioIni: ini,
+        srcContent: src,
+      });
+      setProjectDir(dir);
+      await invoke("add_recent", { projectDir: dir });
+      await loadRecents();
+      log(`Saved project as: ${dir}`);
+    } catch (e) {
+      log(`save as error: ${e}`);
     }
   }
 
@@ -231,7 +302,7 @@ export default function App() {
     } catch (e) {
       log(`list_recent error: ${e}`);
     }
-  };
+  }
 
   /** Run one arduino-cli invocation; resolves with its exit code. */
   async function runCli(
@@ -343,6 +414,49 @@ export default function App() {
   return (
     <div className="wrap">
       <header>
+        <div className="menu">
+          <button className="menu-btn" onClick={() => setMenuOpen(!menuOpen)}>
+            File ▾
+          </button>
+          {menuOpen && (
+            <>
+              <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />
+              <div className="menu-drop">
+              <button onClick={newProject}>New Project…</button>
+              <button onClick={openProject}>Open Project…</button>
+              <div className="menu-sep" />
+              <button
+                onClick={() => {
+                  setMenuOpen(false);
+                  save();
+                }}
+              >
+                Save
+              </button>
+              <button onClick={saveAs}>Save As…</button>
+              {recents.length > 0 && (
+                <>
+                  <div className="menu-sep" />
+                  <div className="menu-label">Recent projects</div>
+                  {recents.map((r) => (
+                    <button
+                      key={r}
+                      className="menu-recent"
+                      title={r}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        loadProject(r);
+                      }}
+                    >
+                      {r.split("/").pop()}
+                    </button>
+                  ))}
+                </>
+              )}
+            </div>
+            </>
+          )}
+        </div>
         <span className="brand">openplatform-ide</span>
         <span className="sub">Tauri 2 · React · TS — Arduino-IDE-style</span>
         <div className="actions">
