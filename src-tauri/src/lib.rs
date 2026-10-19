@@ -853,6 +853,223 @@ fn serial_stop(state: tauri::State<SerialState>) {
     }
 }
 
+// ----------------------------------------------------------------- terminal ---
+//
+// Modelled on Zed's `terminal` crate (`PtyProcessInfo` + alacritty-backed grid):
+// a real PTY is spawned, the child's bytes are streamed to the webview, and
+// keystrokes are written back. Output is rendered by xterm.js in the front end
+// (the same division of labour as Zed's `terminal_view::terminal_element`,
+// where the emulator owns the grid and the view only paints it).
+
+struct TerminalSession {
+    writer: Box<dyn std::io::Write + Send>,
+    master: Box<dyn portable_pty::MasterPty + Send>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    stop: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct TerminalState {
+    session: Mutex<Option<TerminalSession>>,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalData {
+    data: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalStatus {
+    open: bool,
+    cwd: String,
+    shell: String,
+    message: String,
+}
+
+/// The shell Zed picks: `$SHELL`, falling back to the platform default.
+fn default_shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| {
+        if cfg!(target_os = "windows") {
+            std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into())
+        } else {
+            "/bin/zsh".into()
+        }
+    })
+}
+
+/// Zed exports a small identity env to every terminal it spawns; we do the same
+/// so tools that branch on being "in an IDE terminal" behave normally.
+fn terminal_env() -> Vec<(String, String)> {
+    vec![
+        ("TERM".into(), "xterm-256color".into()),
+        ("COLORTERM".into(), "truecolor".into()),
+        ("TERM_PROGRAM".into(), "openplatform-ide".into()),
+        ("TERM_PROGRAM_VERSION".into(), env!("CARGO_PKG_VERSION").into()),
+    ]
+}
+
+/// Resolve the directory a terminal should start in.
+///
+/// Mirrors Zed's `default_working_directory`: the caller passes the open project
+/// directory, and we fall back to `$HOME` when there is none — or when the path
+/// no longer exists (e.g. a deleted project), so the shell always opens.
+fn resolve_terminal_dir(cwd: &str) -> PathBuf {
+    let p = PathBuf::from(cwd);
+    if cwd.is_empty() || !p.is_dir() {
+        PathBuf::from(home())
+    } else {
+        p
+    }
+}
+
+/// Spawn a login-ish interactive shell in `cwd`.
+///
+/// `cwd` is resolved by the front end with Zed's precedence: the open project
+/// directory when there is one, otherwise the user's home directory. An empty
+/// or non-existent `cwd` falls back to home so the terminal always opens.
+#[tauri::command]
+fn terminal_start(
+    app: tauri::AppHandle,
+    state: tauri::State<TerminalState>,
+    cwd: String,
+    shell: Option<String>,
+    cols: u16,
+    rows: u16,
+) -> Result<String, String> {
+    // Replace any previous session.
+    terminal_stop_inner(&state);
+
+    let dir = resolve_terminal_dir(&cwd);
+    let shell = shell
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(default_shell);
+
+    let pty = portable_pty::native_pty_system();
+    let pair = pty
+        .openpty(portable_pty::PtySize {
+            rows: rows.max(1),
+            cols: cols.max(1),
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| format!("openpty: {e}"))?;
+
+    let mut cmd = portable_pty::CommandBuilder::new(&shell);
+    // `-l` gives a login shell, matching what Zed presents on macOS.
+    if !cfg!(target_os = "windows") {
+        cmd.arg("-l");
+    }
+    cmd.cwd(&dir);
+    for (k, v) in terminal_env() {
+        cmd.env(k, v);
+    }
+
+    let child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| format!("spawn {shell}: {e}"))?;
+    // The slave fd is not needed in the parent once the child owns it.
+    drop(pair.slave);
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| format!("pty reader: {e}"))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| format!("pty writer: {e}"))?;
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let cwd_s = dir.to_string_lossy().to_string();
+
+    let a = app.clone();
+    let s = stop.clone();
+    let cwd_out = cwd_s.clone();
+    let shell_out = shell.clone();
+    thread::spawn(move || {
+        let _ = a.emit(
+            "terminal-status",
+            TerminalStatus {
+                open: true,
+                cwd: cwd_out,
+                shell: shell_out,
+                message: "terminal started".into(),
+            },
+        );
+        let mut buf = [0u8; 8192];
+        loop {
+            if s.load(Ordering::SeqCst) {
+                break;
+            }
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let _ = a.emit("terminal-data", TerminalData { data });
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = a.emit(
+            "terminal-status",
+            TerminalStatus {
+                open: false,
+                cwd: String::new(),
+                shell: String::new(),
+                message: "terminal exited".into(),
+            },
+        );
+    });
+
+    *state.session.lock().unwrap() = Some(TerminalSession { writer, master: pair.master, child, stop });
+    Ok(cwd_s)
+}
+
+/// Write a keystroke / paste from the front end into the child's stdin.
+#[tauri::command]
+fn terminal_write(state: tauri::State<TerminalState>, data: String) -> Result<(), String> {
+    let mut guard = state.session.lock().unwrap();
+    let s = guard.as_mut().ok_or("no terminal session")?;
+    s.writer
+        .write_all(data.as_bytes())
+        .map_err(|e| format!("write: {e}"))?;
+    s.writer.flush().map_err(|e| format!("flush: {e}"))
+}
+
+/// Tell the PTY the viewport changed so full-screen programs reflow correctly.
+#[tauri::command]
+fn terminal_resize(
+    state: tauri::State<TerminalState>,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let guard = state.session.lock().unwrap();
+    let s = guard.as_ref().ok_or("no terminal session")?;
+    s.master
+        .resize(portable_pty::PtySize {
+            rows: rows.max(1),
+            cols: cols.max(1),
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| format!("resize: {e}"))
+}
+
+fn terminal_stop_inner(state: &TerminalState) {
+    if let Some(mut s) = state.session.lock().unwrap().take() {
+        s.stop.store(true, Ordering::SeqCst);
+        let _ = s.child.kill();
+    }
+}
+
+#[tauri::command]
+fn terminal_stop(state: tauri::State<TerminalState>) {
+    terminal_stop_inner(&state);
+}
+
 // ------------------------------------------------------------------ setup ---
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -861,6 +1078,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(SerialState::default())
+        .manage(TerminalState::default())
         .invoke_handler(tauri::generate_handler![
             list_serial_ports,
             identify_chip,
@@ -879,7 +1097,11 @@ pub fn run() {
             search_text,
             document_symbols,
             serial_start,
-            serial_stop
+            serial_stop,
+            terminal_start,
+            terminal_write,
+            terminal_resize,
+            terminal_stop
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -968,5 +1190,84 @@ struct Point {
         for d in [".pio", "node_modules", ".git"] {
             assert!(TREE_IGNORES.contains(&d));
         }
+    }
+
+    #[test]
+    fn terminal_shell_falls_back_to_a_real_binary() {
+        // $SHELL wins; otherwise we must still name an executable shell.
+        let shell = default_shell();
+        assert!(!shell.trim().is_empty());
+        if !cfg!(target_os = "windows") {
+            assert!(
+                PathBuf::from(&shell).is_file(),
+                "shell {shell} is not a file"
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_env_marks_the_program_like_zed_does() {
+        let env = terminal_env();
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("TERM"), Some("xterm-256color"));
+        assert_eq!(get("TERM_PROGRAM"), Some("openplatform-ide"));
+        assert!(get("COLORTERM").is_some());
+    }
+
+    /// Zed's `default_working_directory`: the project directory when one is
+    /// open, otherwise home. The backend only needs to honour what it is given.
+    #[test]
+    fn terminal_cwd_prefers_the_project_then_home() {
+        let tmp = std::env::temp_dir();
+        let dir = tmp.to_string_lossy().to_string();
+
+        // An existing directory is used verbatim.
+        assert_eq!(resolve_terminal_dir(&dir), tmp);
+
+        // Empty or bogus paths fall back to the home directory.
+        let h = PathBuf::from(home());
+        assert_eq!(resolve_terminal_dir(""), h);
+        assert_eq!(resolve_terminal_dir("/definitely/not/here/xyzzy"), h);
+    }
+
+    /// Spawn a real PTY, run a command in it, and read the bytes back — this is
+    /// the exact path `terminal_start` uses on the user's machine.
+    #[test]
+    fn a_pty_runs_a_command_and_streams_output() {
+        let pty = portable_pty::native_pty_system();
+        let pair = pty
+            .openpty(portable_pty::PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+
+        let mut cmd = portable_pty::CommandBuilder::new("/bin/sh");
+        cmd.arg("-c");
+        cmd.arg("printf pio-pty-roundtrip");
+        cmd.cwd(std::env::temp_dir());
+
+        let mut child = pair.slave.spawn_command(cmd).expect("spawn");
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().expect("reader");
+
+        let mut got = String::new();
+        let mut buf = [0u8; 1024];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            got.push_str(&String::from_utf8_lossy(&buf[..n]));
+            if got.contains("pio-pty-roundtrip") {
+                break;
+            }
+        }
+        let _ = child.kill();
+        assert!(
+            got.contains("pio-pty-roundtrip"),
+            "pty produced {got:?}"
+        );
     }
 }

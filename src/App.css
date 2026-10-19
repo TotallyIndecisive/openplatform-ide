@@ -398,6 +398,32 @@ input { cursor: text; }
 }
 .tag { color: var(--accent); margin-left: 6px; text-transform: none; letter-spacing: 0; }
 
+/* --- Terminal dock --- */
+.terminal-dock { flex: 0 0 280px; }
+.terminal-dock .dock-head { flex: 0 0 auto; }
+.term-cwd {
+  margin-left: 10px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46ch;
+  direction: rtl;            /* keep the tail of long paths visible */
+  text-align: left;
+}
+.terminal-host {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 8px 8px;
+  background: #171a1e;
+  overflow: hidden;
+}
+/* xterm sizes itself; make it fill the dock without a scrollbar of its own. */
+.terminal-host .xterm { height: 100%; }
+.terminal-host .xterm-viewport { background: transparent !important; }
+
 /* --- Status bar --- */
 .statusbar {
   display: flex;

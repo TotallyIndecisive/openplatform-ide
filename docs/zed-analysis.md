@@ -119,6 +119,51 @@ and is the main reason it cannot match Zed's feel. Concrete, staged plan:
   4. **Keep the WebView warm** — do not destroy/recreate windows when switching projects.
   5. Only load **C/C++** grammar + one theme at startup.
 
+## 5. Integrated terminal (evidence-backed)
+
+Zed's terminal is a first-class `Workspace` item, not a shell-out: a PTY is spawned, its bytes
+are fed through an ANSI parser into a terminal grid, and that grid is rendered by the GPU.
+
+### Architecture
+
+| Layer | Evidence | Meaning |
+|---|---|---|
+| PTY | `terminal::pty_info::PtyProcessInfo`, `terminal::PtyEvent`, `nix::*` | openpty + `nix` syscalls; no `portable-pty` symbols |
+| Emulator | `terminal::alacritty::*` (`event_loop`, `tty::unix::from_fd`, `grid::row`, `selection`) | embeds the `alacritty_terminal` crate |
+| ANSI | `terminal::alacritty::ZedListener` impl of `vte::ansi::Handler` | `vte` parses bytes into grid ops |
+| View | `terminal_view::TerminalView`, `terminal_view::terminal_element` | grid → GPU quads |
+| Panel | `terminal_view::terminal_panel::TerminalPanel`, `TerminalProvider::spawn`, `new_terminal_pane` | the dock tab that owns terminals |
+| Builders | `terminal::TerminalBuilder::new`, `new_display_only_with_bounds` | the "display only" variant is the inline assistant |
+| Persistence | `terminal_view::persistence::{TerminalDb, get_working_directory}` | terminal db remembers each terminal's cwd |
+
+### Shell selection
+
+- Reads `$SHELL`; ships `/bin/zsh` as the literal fallback (strings in the binary).
+- Exports `TERM_PROGRAM` to children (also `TERM`, `COLORTERM` shape colours).
+- Shell/args are overridable via `terminal` settings (`shell`, `program`, `args`, `env`, `cwd`).
+
+### Working directory — this is the part to replicate
+
+`terminal_view::default_working_directory` matches a **4-variant enum** and dispatches:
+
+| Variant | Call target | Directory |
+|---|---|---|
+| 0 | `project::terminals::Project::active_entry_directory` | dir of the **active editor tab's** file |
+| 1 | `project::terminals::Project::active_project_directory` | the active **worktree root** |
+| 2 | first worktree (`Workspace::worktrees` → `first_project_directory`) | the **first** project root |
+| 3 | none (`-1`) | no cwd → the process default (**`$HOME`**) |
+
+The other `project::terminals::Project` entry points confirm the same split:
+`first_project_directory`, `active_project_directory`, `active_entry_directory`,
+`create_local_terminal`, `create_terminal_task`, `clone_terminal`, `terminal_settings`.
+
+Both directory resolvers route through `project::worktree_store::WorktreeStore::worktree_for_entry`,
+so directories are always real worktree paths.
+
+**Behaviour we adopt:** with a saved project open the terminal starts in (and stays in) the
+project directory; on a cold launch with no project it starts in `$HOME`. Matches the two
+relevant variants (1 and 3 above).
+
 ## Limits of this analysis
 
 - Hopper decompilation is unresolved (120 s startup budget vs 249 MB Rust binary).

@@ -5,6 +5,9 @@ import { loader, Editor } from "@monaco-editor/react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import * as monaco from "monaco-editor";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
 import "./App.css";
 
 // Bundle Monaco locally (no CDN at runtime).
@@ -136,6 +139,8 @@ export default function App() {
   const [cursor, setCursor] = useState({ line: 1, col: 1 });
   const [buildState, setBuildState] = useState<"idle" | "ok" | "err">("idle");
   const [logOpen, setLogOpen] = useState(false);
+  const [termOpen, setTermOpen] = useState(false);
+  const [termCwd, setTermCwd] = useState("");
 
   const logRef = useRef<HTMLPreElement>(null);
   const serRef = useRef<HTMLPreElement>(null);
@@ -143,6 +148,12 @@ export default function App() {
   const buffersRef = useRef<Buffer[]>([]);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const overlayInputRef = useRef<HTMLInputElement>(null);
+  const termHostRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const termOpenRef = useRef(false);
+  const termStartRef = useRef<((cwd?: string) => void) | null>(null);
+  const homeDirRef = useRef<string>("");
 
   activeRef.current = activePath;
   buffersRef.current = buffers;
@@ -243,10 +254,25 @@ export default function App() {
         }
       )
     );
+    offs.push(
+      listen<{ data: string }>("terminal-data", (e) => {
+        termRef.current?.write(e.payload.data);
+      })
+    );
+    offs.push(
+      listen<{ open: boolean; cwd: string; shell: string; message: string }>(
+        "terminal-status",
+        (e) => {
+          if (e.payload.open) setTermCwd(e.payload.cwd);
+          log(`[terminal] ${e.payload.message}`);
+        }
+      )
+    );
     scan();
     loadRecents();
     invoke<{ projectDir?: string; home: string; esptool?: string }>("app_paths")
       .then((p) => {
+        homeDirRef.current = p.home;
         openProjectDir(p.projectDir ?? `${p.home}/.openplatform-ide/projects/BlinkPIO`);
       })
       .catch((e) => log(`app_paths error: ${e}`));
@@ -262,6 +288,108 @@ export default function App() {
   useEffect(() => {
     serRef.current?.scrollTo({ top: serRef.current.scrollHeight });
   }, [serialText]);
+
+  // ============================================================== terminal ===
+  //
+  // Zed's rule (`terminal_view::default_working_directory`): a terminal opens in
+  // the project directory when a project is open, and in $HOME otherwise. We
+  // resolve the same way, then hand the directory to the backend, which spawns
+  // the login shell inside a real PTY.
+
+  const resolveTerminalCwd = useCallback(() => {
+    return projectDir || homeDirRef.current || "";
+  }, [projectDir]);
+
+  /** Create the xterm instance once, then keep it alive across open/close. */
+  const ensureTerminal = useCallback(() => {
+    if (termRef.current) return termRef.current;
+    const term = new Terminal({
+      fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
+      fontSize: 12.5,
+      lineHeight: 1.25,
+      cursorBlink: true,
+      allowProposedApi: true,
+      scrollback: 10000,
+      theme: {
+        background: "#171a1e",
+        foreground: "#abb2bf",
+        cursor: "#4c8bf5",
+        selectionBackground: "#3a4048",
+        black: "#1e2227", red: "#e06c75", green: "#98c379", yellow: "#e5c07b",
+        blue: "#4c8bf5", magenta: "#c678dd", cyan: "#56b6c2", white: "#abb2bf",
+        brightBlack: "#7f848e", brightRed: "#e06c75", brightGreen: "#98c379",
+        brightYellow: "#e5c07b", brightBlue: "#61afef", brightMagenta: "#c678dd",
+        brightCyan: "#56b6c2", brightWhite: "#d7dae0",
+      },
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    // Keystrokes go straight to the child's stdin.
+    term.onData((d) => { invoke("terminal_write", { data: d }).catch(() => {}); });
+    termRef.current = term;
+    fitRef.current = fit;
+    return term;
+  }, []);
+
+  /** Spawn (or restart) the shell in `cwd` / the resolved project directory. */
+  const startTerminal = useCallback(
+    async (cwd?: string) => {
+      const dir = cwd ?? resolveTerminalCwd();
+      const term = ensureTerminal();
+      const fit = fitRef.current;
+      // Attach before spawning so no early output is lost.
+      if (termHostRef.current && !term.element) {
+        term.open(termHostRef.current);
+      }
+      try { fit?.fit(); } catch { /* host not laid out yet */ }
+      const cols = term.cols || 80;
+      const rows = term.rows || 24;
+      try {
+        const used = await invoke<string>("terminal_start", { cwd: dir, cols, rows });
+        setTermCwd(used);
+      } catch (e) {
+        term.writeln(`\x1b[31mfailed to start terminal: ${e}\x1b[0m`);
+        log(`terminal_start error: ${e}`);
+      }
+    },
+    [ensureTerminal, resolveTerminalCwd, log]
+  );
+  termStartRef.current = startTerminal;
+
+  /** Activity-bar / menu entry point. */
+  const toggleTerminal = useCallback(() => {
+    setTermOpen((open) => {
+      const next = !open;
+      termOpenRef.current = next;
+      if (next) {
+        // Defer until the host div is mounted, then open + spawn.
+        setTimeout(() => startTerminal(), 0);
+      }
+      return next;
+    });
+  }, [startTerminal]);
+
+  // While the panel is visible, keep xterm sized to its container.
+  useEffect(() => {
+    if (!termOpen) return;
+    const el = termHostRef.current;
+    if (!el) return;
+    const term = ensureTerminal();
+    if (!term.element) term.open(el);
+    const fit = () => {
+      try {
+        fitRef.current?.fit();
+        if (term.cols && term.rows) {
+          invoke("terminal_resize", { cols: term.cols, rows: term.rows }).catch(() => {});
+        }
+      } catch { /* ignore transient layout */ }
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    term.focus();
+    return () => ro.disconnect();
+  }, [termOpen, ensureTerminal]);
 
   // ===================================================== workspace buffers ===
 
@@ -585,6 +713,9 @@ export default function App() {
       ["Device: Refresh Ports", "⟳"],
       ["Device: Identify Chip", ""],
       ["Serial: Toggle Monitor", ""],
+      ["Terminal: Toggle", "⌃`"],
+      ["Terminal: New", ""],
+      ["Terminal: Restart Shell", ""],
     ] as Array<[string, string]>,
     []
   );
@@ -621,6 +752,13 @@ export default function App() {
     "Device: Refresh Ports": () => scan(),
     "Device: Identify Chip": () => identify(),
     "Serial: Toggle Monitor": () => toggleSerial(),
+    "Terminal: Toggle": () => toggleTerminal(),
+    "Terminal: New": () => {
+      setTermOpen(true);
+      termOpenRef.current = true;
+      setTimeout(() => actionsRef.current["Terminal: Restart Shell"]?.(), 0);
+    },
+    "Terminal: Restart Shell": () => startTerminal(resolveTerminalCwd()),
   };
 
   const openFinder = useCallback(() => {
@@ -726,6 +864,10 @@ export default function App() {
       } else if (mod && e.key.toLowerCase() === "b") {
         e.preventDefault();
         setPanelOpen((v) => !v);
+      } else if (e.ctrlKey && e.key === "`") {
+        // Zed: ⌃` toggles the terminal panel.
+        e.preventDefault();
+        actionsRef.current["Terminal: Toggle"]?.();
       } else if (e.key === "Escape" && overlay) {
         setOverlay(null);
       }
@@ -1032,6 +1174,13 @@ export default function App() {
             ⌁
           </button>
           <span className="rail-spacer" />
+          <button
+            className={termOpen ? "active" : ""}
+            title="Terminal (⌃`)"
+            onClick={toggleTerminal}
+          >
+            &gt;_
+          </button>
           <button title="Command palette (⇧⌘P)" onClick={openPalette}>⌘</button>
         </div>
 
@@ -1219,6 +1368,25 @@ export default function App() {
         </div>
       )}
 
+      {/* ------------------------------------------------- bottom dock: terminal */}
+      {termOpen && (
+        <div className="bottom-dock terminal-dock">
+          <div className="dock-head">
+            <span>Terminal</span>
+            {termCwd && <span className="term-cwd" title={termCwd}>{termCwd}</span>}
+            <span className="spacer" />
+            <button title="New terminal in project" onClick={() => startTerminal()}>＋</button>
+            <button title="Restart shell" onClick={() => startTerminal(termCwd || undefined)}>⟳</button>
+            <button title="Hide terminal (⌃`)" onClick={() => setTermOpen(false)}>✕</button>
+          </div>
+          <div
+            className="terminal-host"
+            ref={termHostRef}
+            onMouseDown={() => termRef.current?.focus()}
+          />
+        </div>
+      )}
+
       {/* ---------------------------------------------------------- status bar */}
       <div className="statusbar">
         <span
@@ -1231,6 +1399,9 @@ export default function App() {
         </span>
         <span className="sb-item click" onClick={() => { setPanel("serial"); setPanelOpen(true); }}>
           {serialOpen ? `● ${port} @ ${baud}` : `○ ${port || "no port"}`}
+        </span>
+        <span className="sb-item click" onClick={toggleTerminal} title="Terminal (⌃`)">
+          {termOpen ? "▾ terminal" : "▸ terminal"}
         </span>
         <span className="spacer" />
         {active && (
