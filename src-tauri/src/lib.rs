@@ -945,6 +945,25 @@ struct Point {
     }
 
     #[test]
+    fn outline_handles_a_real_arduino_sketch() {
+        // The exact shape of the shipped blink example.
+        let src = "#include <Arduino.h>\n\n#define LED_PIN 23\n\nunsigned long previousMillis = 0;\nconst unsigned long interval = 5000; // 5 seconds\nbool ledState = false;\n\nvoid setup() {\n  pinMode(LED_PIN, OUTPUT);\n}\n\nvoid loop() {\n  unsigned long now = millis();\n}\n";
+        let syms = scan_declarations(src);
+        let kind = |n: &str| syms.iter().find(|s| s.name == n).map(|s| s.kind.clone());
+
+        // Multi-word declarations resolve to the variable, not the type word.
+        assert_eq!(kind("previousMillis").as_deref(), Some("variable"));
+        assert_eq!(kind("interval").as_deref(), Some("variable"));
+        assert_eq!(kind("ledState").as_deref(), Some("variable"));
+        assert_eq!(kind("setup").as_deref(), Some("function"));
+        assert_eq!(kind("loop").as_deref(), Some("function"));
+        assert_eq!(kind("LED_PIN").as_deref(), Some("constant"));
+
+        // A nested local must not appear.
+        assert!(kind("now").is_none(), "nested local leaked into outline");
+    }
+
+    #[test]
     fn tree_ignores_cover_build_artifacts() {
         for d in [".pio", "node_modules", ".git"] {
             assert!(TREE_IGNORES.contains(&d));
