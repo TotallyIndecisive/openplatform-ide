@@ -111,7 +111,6 @@ export default function App() {
   const [ports, setPorts] = useState<Port[]>([]);
   const [port, setPort] = useState("");
   const [chip, setChip] = useState<ChipInfo | null>(null);
-  const [out, setOut] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [status, setStatus] = useState("");
@@ -138,11 +137,10 @@ export default function App() {
   const [overlayItems, setOverlayItems] = useState<Item[]>([]);
   const [cursor, setCursor] = useState({ line: 1, col: 1 });
   const [buildState, setBuildState] = useState<"idle" | "ok" | "err">("idle");
-  const [logOpen, setLogOpen] = useState(false);
+
   const [termOpen, setTermOpen] = useState(false);
   const [termCwd, setTermCwd] = useState("");
 
-  const logRef = useRef<HTMLPreElement>(null);
   const serRef = useRef<HTMLPreElement>(null);
   const activeRef = useRef<string>("");
   const buffersRef = useRef<Buffer[]>([]);
@@ -154,6 +152,8 @@ export default function App() {
   const termOpenRef = useRef(false);
   const termStartRef = useRef<((cwd?: string) => void) | null>(null);
   const homeDirRef = useRef<string>("");
+  const termWriteRef = useRef<((text: string) => void) | null>(null);
+  const termQueueRef = useRef<string>("");
 
   activeRef.current = activePath;
   buffersRef.current = buffers;
@@ -163,7 +163,11 @@ export default function App() {
   const pendingExit = useRef<number | null | undefined>(undefined);
 
   const log = useCallback(
-    (s: string) => setOut((o) => [...o, ...(Array.isArray(s) ? s : [s])]),
+    (s: string) => {
+      const text = Array.isArray(s) ? s.join("\n") : s;
+      // All build/upload/diagnostic output belongs in the terminal now.
+      termWriteRef.current?.(text.endsWith("\n") ? text : `${text}\n`);
+    },
     []
   );
 
@@ -219,7 +223,10 @@ export default function App() {
     offs.push(
       listen<{ stream: string; line: string }>("cli-output", (e) => {
         const line = stripAnsi(e.payload.line);
-        setOut((o) => [...o, line]);
+        // stderr is tinted so compiler errors stand out in the terminal.
+        const text =
+          e.payload.stream === "stderr" ? `\x1b[31m${line}\x1b[0m` : line;
+        termWriteRef.current?.(`${text}\n`);
         if (line.trim()) setStatus(line.trim().slice(0, 140));
         // esptool reports flashing progress as: `Writing at 0x00010000... (42 %)`
         const m = line.match(/\((\d+)\s*%\)/);
@@ -282,9 +289,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
-  }, [out]);
   useEffect(() => {
     serRef.current?.scrollTo({ top: serRef.current.scrollHeight });
   }, [serialText]);
@@ -390,6 +394,31 @@ export default function App() {
     term.focus();
     return () => ro.disconnect();
   }, [termOpen, ensureTerminal]);
+
+  /** Write build/upload output into the terminal, opening it if needed.
+   *
+   * This is why there is no separate build-output dock any more: pio's stdout
+   * lands in the same surface the user types in, exactly like running it by
+   * hand. Writes queue behind any in-flight spawn so early output is not lost. */
+  const termWrite = useCallback((text: string) => {
+    if (!termOpenRef.current) {
+      termOpenRef.current = true;
+      setTermOpen(true);
+    }
+    termQueueRef.current += text;
+    const flush = () => {
+      const t = termRef.current;
+      if (!t) return;
+      const pending = termQueueRef.current;
+      termQueueRef.current = "";
+      // Normalise: pio emits \n, the terminal wants \r\n.
+      t.write(pending.replace(/\r?\n/g, "\r\n"));
+    };
+    // The host div mounts one tick after setTermOpen; retry once if needed.
+    if (termRef.current) flush();
+    else setTimeout(flush, 0);
+  }, []);
+  termWriteRef.current = termWrite;
 
   // ===================================================== workspace buffers ===
 
@@ -879,7 +908,10 @@ export default function App() {
 
   // ============================================================ build/upload ===
 
-  /** Run one pio invocation; resolves with its exit code. */
+  /** Run one pio invocation; resolves with its exit code.
+   *
+   * Output goes into the terminal, echoed like a shell would run it, so a build
+   * looks the same as if the user had typed `pio run` themselves. */
   async function runCli(
     args: string[],
     cwd: string,
@@ -890,12 +922,13 @@ export default function App() {
     setBusy(label);
     setProgress(null);
     setStatus("");
-    if (prefix) log(`\n--- ${prefix} ---`);
+    if (prefix) log(`\x1b[90m── ${prefix} ──\x1b[0m`);
+    log(`\x1b[36m❯ pio ${args.join(" ")}\x1b[0m`);
     const done = waitExit();
     try {
       await invoke("cli_start", { cwd, args });
     } catch (e) {
-      log(`${label} error: ${e}`);
+      log(`\x1b[31m${label} error: ${e}\x1b[0m`);
       exitResolver.current = null;
       setBusy(null);
       return -1;
@@ -1354,26 +1387,12 @@ export default function App() {
         </div>
       </div>
 
-      {/* --------------------------------------------- bottom dock: build log */}
-      {logOpen && (
-        <div className="bottom-dock">
-          <div className="dock-head">
-            <span>Build output</span>
-            {busy && <span className="tag">● {busy}</span>}
-            <span className="spacer" />
-            <button onClick={() => setOut([])}>clear</button>
-            <button onClick={() => setLogOpen(false)}>✕</button>
-          </div>
-          <pre ref={logRef} className="out">{out.length ? out.join("\n") : "Ready."}</pre>
-        </div>
-      )}
-
       {/* ------------------------------------------------- bottom dock: terminal */}
       {termOpen && (
         <div className="bottom-dock terminal-dock">
           <div className="dock-head">
             <span>Terminal</span>
-            {termCwd && <span className="term-cwd" title={termCwd}>{termCwd}</span>}
+            {termCwd && <span className="term-cwd" title={termCwd}>{`'${termCwd}'`}</span>}
             <span className="spacer" />
             <button title="New terminal in project" onClick={() => startTerminal()}>＋</button>
             <button title="Restart shell" onClick={() => startTerminal(termCwd || undefined)}>⟳</button>
@@ -1391,8 +1410,8 @@ export default function App() {
       <div className="statusbar">
         <span
           className={`sb-item click ${buildState === "ok" ? "ok" : buildState === "err" ? "err" : ""}`}
-          onClick={() => setLogOpen((v) => !v)}
-          title="Build output"
+          onClick={toggleTerminal}
+          title="Build output is in the terminal"
         >
           {buildState === "idle" ? "○ ready" : buildState === "ok" ? "✓ ok" : "✗ failed"}
           {busy ? ` · ${busy}` : ""}

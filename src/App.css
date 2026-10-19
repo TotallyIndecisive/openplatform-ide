@@ -385,17 +385,6 @@ input { cursor: text; }
   border-top: 1px solid var(--border);
   min-height: 0;
 }
-.bottom-dock pre.out {
-  flex: 1;
-  margin: 0;
-  padding: 8px 12px;
-  overflow: auto;
-  font: 11.5px/1.45 var(--mono);
-  color: #cbd5e1;
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: #171a1e;
-}
 .tag { color: var(--accent); margin-left: 6px; text-transform: none; letter-spacing: 0; }
 
 /* --- Terminal dock --- */
@@ -403,15 +392,19 @@ input { cursor: text; }
 .terminal-dock .dock-head { flex: 0 0 auto; }
 .term-cwd {
   margin-left: 10px;
-  color: var(--muted);
+  padding: 1px 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: #1a1e23;
+  color: var(--yellow);
   font-family: var(--mono);
   font-size: 10.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 46ch;
-  direction: rtl;            /* keep the tail of long paths visible */
-  text-align: left;
+  max-width: 52ch;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 .terminal-host {
   flex: 1;
