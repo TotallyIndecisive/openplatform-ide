@@ -156,6 +156,7 @@ export default function App() {
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const termOpenRef = useRef(false);
+  const termStartedRef = useRef(false);
   const termStartRef = useRef<((cwd?: string) => void) | null>(null);
   const homeDirRef = useRef<string>("");
 
@@ -341,13 +342,15 @@ export default function App() {
       const dir = cwd ?? resolveTerminalCwd();
       const term = ensureTerminal();
       const fit = fitRef.current;
-      // Attach before spawning so no early output is lost.
+      // The host div is always mounted, so the grid is already attached; only
+      // the very first call needs to open it.
       if (termHostRef.current && !term.element) {
         term.open(termHostRef.current);
       }
       try { fit?.fit(); } catch { /* host not laid out yet */ }
       const cols = term.cols || 80;
       const rows = term.rows || 24;
+      termStartedRef.current = true;
       try {
         const used = await invoke<string>("terminal_start", { cwd: dir, cols, rows });
         setTermCwd(used);
@@ -365,8 +368,11 @@ export default function App() {
     setBottom((cur) => {
       const next = cur === "terminal" ? null : "terminal";
       termOpenRef.current = next === "terminal";
-      if (next === "terminal") {
-        // Defer until the host div is mounted, then open + spawn.
+      // Spawn only once: the host div stays mounted, so revealing the dock is
+      // enough on later toggles. Restarting here is what produced a second,
+      // "old" terminal every time the button was pressed.
+      if (next === "terminal" && !termStartedRef.current) {
+        termStartedRef.current = true;
         setTimeout(() => termStartRef.current?.(), 0);
       }
       return next;
@@ -386,13 +392,15 @@ export default function App() {
     setBottom((cur) => (cur === "terminal" ? "output" : cur));
   }, []);
 
-  // While the panel is visible, keep xterm sized to its container.
+  // The host div is always mounted, so attach xterm to it once. This effect
+  // only keeps the grid sized while the dock is visible.
   useEffect(() => {
-    if (!termOpen) return;
     const el = termHostRef.current;
     if (!el) return;
+    // Attach on first render; the node is stable from here on.
     const term = ensureTerminal();
     if (!term.element) term.open(el);
+    if (!termOpen) return;
     const fit = () => {
       try {
         fitRef.current?.fit();
@@ -1385,23 +1393,30 @@ export default function App() {
       </div>
 
       {/* ------------------------------------------------- bottom dock: terminal */}
-      {termOpen && (
-        <div className="bottom-dock terminal-dock">
-          <div className="dock-head">
-            <span>Terminal</span>
-            {termCwd && <span className="term-cwd" title={termCwd}>{`'${termCwd}'`}</span>}
-            <span className="spacer" />
-            <button title="New terminal in project" onClick={() => startTerminal()}>＋</button>
-            <button title="Restart shell" onClick={() => startTerminal(termCwd || undefined)}>⟳</button>
-            <button title="Hide terminal (⌃`)" onClick={() => setBottom(null)}>✕</button>
-          </div>
-          <div
-            className="terminal-host"
-            ref={termHostRef}
-            onMouseDown={() => termRef.current?.focus()}
-          />
+      {/*
+        Kept mounted at all times and hidden with CSS when another bottom view
+        is active. Unmounting it would orphan xterm's DOM node: `term.element`
+        stays set, so a later `term.open()` is skipped and the freshly mounted
+        host div renders empty — the "blank terminal after toggling" bug.
+      */}
+      <div
+        className={`bottom-dock terminal-dock${termOpen ? "" : " hidden"}`}
+        aria-hidden={!termOpen}
+      >
+        <div className="dock-head">
+          <span>Terminal</span>
+          {termCwd && <span className="term-cwd" title={termCwd}>{`'${termCwd}'`}</span>}
+          <span className="spacer" />
+          <button title="New terminal in project" onClick={() => startTerminal()}>＋</button>
+          <button title="Restart shell" onClick={() => startTerminal(termCwd || undefined)}>⟳</button>
+          <button title="Hide terminal (⌃`)" onClick={() => setBottom(null)}>✕</button>
         </div>
-      )}
+        <div
+          className="terminal-host"
+          ref={termHostRef}
+          onMouseDown={() => termRef.current?.focus()}
+        />
+      </div>
 
       {/* ------------------------------------- bottom dock: build & upload output */}
       {outOpen && (

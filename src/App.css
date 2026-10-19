@@ -404,6 +404,11 @@ input { cursor: text; }
 /* --- Terminal dock --- */
 .terminal-dock { flex: 0 0 280px; }
 .terminal-dock .dock-head { flex: 0 0 auto; }
+/* The dock stays mounted so xterm keeps its DOM node; hidden means collapsed. */
+.terminal-dock.hidden,
+.output-dock.hidden {
+  display: none;
+}
 .term-cwd {
   margin-left: 10px;
   padding: 1px 7px;
