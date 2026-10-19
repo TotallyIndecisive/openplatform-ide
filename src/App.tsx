@@ -111,6 +111,7 @@ export default function App() {
   const [ports, setPorts] = useState<Port[]>([]);
   const [port, setPort] = useState("");
   const [chip, setChip] = useState<ChipInfo | null>(null);
+  const [out, setOut] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [status, setStatus] = useState("");
@@ -138,10 +139,15 @@ export default function App() {
   const [cursor, setCursor] = useState({ line: 1, col: 1 });
   const [buildState, setBuildState] = useState<"idle" | "ok" | "err">("idle");
 
-  const [termOpen, setTermOpen] = useState(false);
+  // The bottom region shows exactly one view at a time: the terminal or the
+  // build/upload output. `null` means the region is collapsed.
+  const [bottom, setBottom] = useState<"terminal" | "output" | null>(null);
+  const termOpen = bottom === "terminal";
+  const outOpen = bottom === "output";
   const [termCwd, setTermCwd] = useState("");
 
   const serRef = useRef<HTMLPreElement>(null);
+  const logRef = useRef<HTMLPreElement>(null);
   const activeRef = useRef<string>("");
   const buffersRef = useRef<Buffer[]>([]);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -152,8 +158,6 @@ export default function App() {
   const termOpenRef = useRef(false);
   const termStartRef = useRef<((cwd?: string) => void) | null>(null);
   const homeDirRef = useRef<string>("");
-  const termWriteRef = useRef<((text: string) => void) | null>(null);
-  const termQueueRef = useRef<string>("");
 
   activeRef.current = activePath;
   buffersRef.current = buffers;
@@ -163,11 +167,7 @@ export default function App() {
   const pendingExit = useRef<number | null | undefined>(undefined);
 
   const log = useCallback(
-    (s: string) => {
-      const text = Array.isArray(s) ? s.join("\n") : s;
-      // All build/upload/diagnostic output belongs in the terminal now.
-      termWriteRef.current?.(text.endsWith("\n") ? text : `${text}\n`);
-    },
+    (s: string) => setOut((o) => [...o, ...(Array.isArray(s) ? s : [s])]),
     []
   );
 
@@ -223,10 +223,7 @@ export default function App() {
     offs.push(
       listen<{ stream: string; line: string }>("cli-output", (e) => {
         const line = stripAnsi(e.payload.line);
-        // stderr is tinted so compiler errors stand out in the terminal.
-        const text =
-          e.payload.stream === "stderr" ? `\x1b[31m${line}\x1b[0m` : line;
-        termWriteRef.current?.(`${text}\n`);
+        setOut((o) => [...o, line]);
         if (line.trim()) setStatus(line.trim().slice(0, 140));
         // esptool reports flashing progress as: `Writing at 0x00010000... (42 %)`
         const m = line.match(/\((\d+)\s*%\)/);
@@ -289,6 +286,9 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+  }, [out]);
   useEffect(() => {
     serRef.current?.scrollTo({ top: serRef.current.scrollHeight });
   }, [serialText]);
@@ -362,16 +362,29 @@ export default function App() {
 
   /** Activity-bar / menu entry point. */
   const toggleTerminal = useCallback(() => {
-    setTermOpen((open) => {
-      const next = !open;
-      termOpenRef.current = next;
-      if (next) {
+    setBottom((cur) => {
+      const next = cur === "terminal" ? null : "terminal";
+      termOpenRef.current = next === "terminal";
+      if (next === "terminal") {
         // Defer until the host div is mounted, then open + spawn.
-        setTimeout(() => startTerminal(), 0);
+        setTimeout(() => termStartRef.current?.(), 0);
       }
       return next;
     });
-  }, [startTerminal]);
+  }, []);
+
+  /** Activity-bar / menu entry point for the build & upload output. */
+  const toggleOutput = useCallback(() => {
+    setBottom((cur) => (cur === "output" ? null : "output"));
+  }, []);
+
+  /** Bring the output forward when a build step starts.
+   *
+   * If the user is sitting in the terminal, switch to the output so the run is
+   * visible; otherwise leave their current view alone. */
+  const revealOutput = useCallback(() => {
+    setBottom((cur) => (cur === "terminal" ? "output" : cur));
+  }, []);
 
   // While the panel is visible, keep xterm sized to its container.
   useEffect(() => {
@@ -394,31 +407,6 @@ export default function App() {
     term.focus();
     return () => ro.disconnect();
   }, [termOpen, ensureTerminal]);
-
-  /** Write build/upload output into the terminal, opening it if needed.
-   *
-   * This is why there is no separate build-output dock any more: pio's stdout
-   * lands in the same surface the user types in, exactly like running it by
-   * hand. Writes queue behind any in-flight spawn so early output is not lost. */
-  const termWrite = useCallback((text: string) => {
-    if (!termOpenRef.current) {
-      termOpenRef.current = true;
-      setTermOpen(true);
-    }
-    termQueueRef.current += text;
-    const flush = () => {
-      const t = termRef.current;
-      if (!t) return;
-      const pending = termQueueRef.current;
-      termQueueRef.current = "";
-      // Normalise: pio emits \n, the terminal wants \r\n.
-      t.write(pending.replace(/\r?\n/g, "\r\n"));
-    };
-    // The host div mounts one tick after setTermOpen; retry once if needed.
-    if (termRef.current) flush();
-    else setTimeout(flush, 0);
-  }, []);
-  termWriteRef.current = termWrite;
 
   // ===================================================== workspace buffers ===
 
@@ -745,6 +733,7 @@ export default function App() {
       ["Terminal: Toggle", "⌃`"],
       ["Terminal: New", ""],
       ["Terminal: Restart Shell", ""],
+      ["Output: Toggle", ""],
     ] as Array<[string, string]>,
     []
   );
@@ -783,11 +772,12 @@ export default function App() {
     "Serial: Toggle Monitor": () => toggleSerial(),
     "Terminal: Toggle": () => toggleTerminal(),
     "Terminal: New": () => {
-      setTermOpen(true);
+      setBottom("terminal");
       termOpenRef.current = true;
       setTimeout(() => actionsRef.current["Terminal: Restart Shell"]?.(), 0);
     },
     "Terminal: Restart Shell": () => startTerminal(resolveTerminalCwd()),
+    "Output: Toggle": () => toggleOutput(),
   };
 
   const openFinder = useCallback(() => {
@@ -908,10 +898,7 @@ export default function App() {
 
   // ============================================================ build/upload ===
 
-  /** Run one pio invocation; resolves with its exit code.
-   *
-   * Output goes into the terminal, echoed like a shell would run it, so a build
-   * looks the same as if the user had typed `pio run` themselves. */
+  /** Run one pio invocation; resolves with its exit code. */
   async function runCli(
     args: string[],
     cwd: string,
@@ -922,13 +909,14 @@ export default function App() {
     setBusy(label);
     setProgress(null);
     setStatus("");
-    if (prefix) log(`\x1b[90m── ${prefix} ──\x1b[0m`);
-    log(`\x1b[36m❯ pio ${args.join(" ")}\x1b[0m`);
+    // A compile/upload is starting: if the terminal is showing, swap to output.
+    revealOutput();
+    if (prefix) log(`\n--- ${prefix} ---`);
     const done = waitExit();
     try {
       await invoke("cli_start", { cwd, args });
     } catch (e) {
-      log(`\x1b[31m${label} error: ${e}\x1b[0m`);
+      log(`${label} error: ${e}`);
       exitResolver.current = null;
       setBusy(null);
       return -1;
@@ -991,6 +979,8 @@ export default function App() {
     setBusy("identify chip");
     setProgress(null);
     setStatus(`probing ${port}…`);
+    // Same rule as a build: pull the output forward if the terminal is up.
+    revealOutput();
     log(`\n--- esptool chip-id on ${port} ---`);
     try {
       const c = await invoke<ChipInfo>("identify_chip", { port });
@@ -1208,6 +1198,13 @@ export default function App() {
           </button>
           <span className="rail-spacer" />
           <button
+            className={outOpen ? "active" : ""}
+            title="Build & upload output"
+            onClick={toggleOutput}
+          >
+            ⧉
+          </button>
+          <button
             className={termOpen ? "active" : ""}
             title="Terminal (⌃`)"
             onClick={toggleTerminal}
@@ -1396,7 +1393,7 @@ export default function App() {
             <span className="spacer" />
             <button title="New terminal in project" onClick={() => startTerminal()}>＋</button>
             <button title="Restart shell" onClick={() => startTerminal(termCwd || undefined)}>⟳</button>
-            <button title="Hide terminal (⌃`)" onClick={() => setTermOpen(false)}>✕</button>
+            <button title="Hide terminal (⌃`)" onClick={() => setBottom(null)}>✕</button>
           </div>
           <div
             className="terminal-host"
@@ -1406,18 +1403,35 @@ export default function App() {
         </div>
       )}
 
+      {/* ------------------------------------- bottom dock: build & upload output */}
+      {outOpen && (
+        <div className="bottom-dock output-dock">
+          <div className="dock-head">
+            <span>Output</span>
+            {busy && <span className="tag">● {busy}</span>}
+            <span className="spacer" />
+            <button onClick={() => setOut([])}>clear</button>
+            <button title="Hide output" onClick={() => setBottom(null)}>✕</button>
+          </div>
+          <pre ref={logRef} className="out">{out.length ? out.join("\n") : "Ready."}</pre>
+        </div>
+      )}
+
       {/* ---------------------------------------------------------- status bar */}
       <div className="statusbar">
         <span
           className={`sb-item click ${buildState === "ok" ? "ok" : buildState === "err" ? "err" : ""}`}
-          onClick={toggleTerminal}
-          title="Build output is in the terminal"
+          onClick={toggleOutput}
+          title="Build & upload output"
         >
           {buildState === "idle" ? "○ ready" : buildState === "ok" ? "✓ ok" : "✗ failed"}
           {busy ? ` · ${busy}` : ""}
         </span>
         <span className="sb-item click" onClick={() => { setPanel("serial"); setPanelOpen(true); }}>
           {serialOpen ? `● ${port} @ ${baud}` : `○ ${port || "no port"}`}
+        </span>
+        <span className="sb-item click" onClick={toggleOutput} title="Output">
+          {outOpen ? "▾ output" : "▸ output"}
         </span>
         <span className="sb-item click" onClick={toggleTerminal} title="Terminal (⌃`)">
           {termOpen ? "▾ terminal" : "▸ terminal"}

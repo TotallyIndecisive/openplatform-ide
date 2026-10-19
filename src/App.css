@@ -387,6 +387,20 @@ input { cursor: text; }
 }
 .tag { color: var(--accent); margin-left: 6px; text-transform: none; letter-spacing: 0; }
 
+/* --- Output dock (build / upload / chip identify) --- */
+.output-dock { flex: 0 0 240px; }
+.output-dock pre.out {
+  flex: 1;
+  margin: 0;
+  padding: 8px 12px;
+  overflow: auto;
+  font: 11.5px/1.45 var(--mono);
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #171a1e;
+}
+
 /* --- Terminal dock --- */
 .terminal-dock { flex: 0 0 280px; }
 .terminal-dock .dock-head { flex: 0 0 auto; }
