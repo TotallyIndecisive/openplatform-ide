@@ -229,8 +229,8 @@ struct CliExit {
     args: Vec<String>,
 }
 
-/// Spawn `arduino-cli` (with our config) and stream its output to the webview
-/// as `cli-output` events, ending with a `cli-exit` event.
+/// Spawn a PlatformIO Core run (`pio run`, …) and stream its output to the
+/// webview as `cli-output` events, ending with a `cli-exit` event.
 ///
 /// Returns as soon as the process is spawned — the `wait()` happens on a
 /// background thread, so a long compile/upload never freezes the webview.
