@@ -728,9 +728,17 @@ fn git_checkout(project_dir: String, branch: String, create: bool) -> Result<ser
     Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
 }
 
+fn find_gh() -> String {
+    if std::path::Path::new("/opt/homebrew/bin/gh").exists() { return "/opt/homebrew/bin/gh".to_string(); }
+    if std::path::Path::new("/usr/local/bin/gh").exists() { return "/usr/local/bin/gh".to_string(); }
+    if std::path::Path::new("/usr/bin/gh").exists() { return "/usr/bin/gh".to_string(); }
+    std::env::var("GH_PATH").unwrap_or_else(|_| "gh".to_string())
+}
+
 #[tauri::command]
 fn gh_auth_status() -> Result<serde_json::Value, String> {
-    let out = Command::new("gh").args(["auth", "status"]).output().map_err(|e| format!("gh not found: {}", e))?;
+    let gh = find_gh();
+    let out = Command::new(&gh).args(["auth", "status"]).output().map_err(|e| format!("gh not found at {}: {}", gh, e))?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let err = String::from_utf8_lossy(&out.stderr).to_string();
     Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
@@ -738,11 +746,12 @@ fn gh_auth_status() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 fn gh_repo_create(project_dir: String, name: String, private: bool, description: Option<String>) -> Result<serde_json::Value, String> {
+    let gh = find_gh();
     let mut args = vec!["repo", "create", &name];
     if private { args.push("--private"); } else { args.push("--public"); }
     if let Some(ref d) = description { args.push("--description"); args.push(d); }
     args.push("--source"); args.push(&project_dir); args.push("--remote"); args.push("origin"); args.push("--push");
-    let out = Command::new("gh").args(args).output().map_err(|e| format!("gh not found: {}", e))?;
+    let out = Command::new(&gh).args(args).output().map_err(|e| format!("gh not found at {}: {}", gh, e))?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let err = String::from_utf8_lossy(&out.stderr).to_string();
     Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
@@ -750,10 +759,11 @@ fn gh_repo_create(project_dir: String, name: String, private: bool, description:
 
 #[tauri::command]
 fn gh_repo_create_remote(project_dir: String, name: String, private: bool) -> Result<serde_json::Value, String> {
+    let gh = find_gh();
     let mut args = vec!["repo", "create", &name];
     if private { args.push("--private"); } else { args.push("--public"); }
     args.push("--source"); args.push(&project_dir); args.push("--remote"); args.push("origin");
-    let out = Command::new("gh").args(args).output().map_err(|e| format!("gh not found: {}", e))?;
+    let out = Command::new(&gh).args(args).output().map_err(|e| format!("gh not found at {}: {}", gh, e))?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let err = String::from_utf8_lossy(&out.stderr).to_string();
     Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
