@@ -1174,7 +1174,6 @@ export default function App() {
     const [branches, setBranches] = useState<any>(null);
     const [remotes, setRemotes] = useState<any>(null);
     const [auth, setAuth] = useState<any>(null);
-    const authChecked = useRef(false);
     const [msg, setMsg] = useState("");
     const [repoName, setRepoName] = useState("");
     const [privateRepo, setPrivateRepo] = useState(true);
@@ -1187,12 +1186,11 @@ export default function App() {
       try { const l = await invoke("git_log", {projectDir, limit: 30}); setLog(l); } catch {}
       try { const b = await invoke("git_branches", {projectDir}); setBranches(b); } catch {}
       try { const r = await invoke("git_remote_list", {projectDir}); setRemotes(r); } catch {}
-      if (!authChecked.current) {
-        authChecked.current = true;
-        try { const a = await invoke("gh_auth_status"); setAuth(a); } catch(e:any){ setAuth({error: e.toString()}); }
-      }
     }
-    useEffect(() => { authChecked.current = false; refresh(); }, [projectDir]);
+    async function checkAuth() {
+      try { const a = await invoke("gh_auth_status"); setAuth(a); } catch(e:any){ setAuth({error: e.toString()}); }
+    }
+    useEffect(() => { refresh(); }, [projectDir]);
     async function addAll() { if (!projectDir) return; try { await invoke("git_add", {projectDir, paths: ["."]}); await refresh(); } catch {} }
     async function commit() { if (!projectDir || !msg.trim()) return; try { await invoke("git_commit", {projectDir, message: msg}); setMsg(""); await refresh(); } catch {} }
     async function init() { if (!projectDir) return; try { await invoke("git_init", {projectDir}); await refresh(); } catch {} }
@@ -1215,7 +1213,10 @@ export default function App() {
         <input value={msg} onChange={e=>setMsg(e.target.value)} placeholder="Commit message" style={{width:"100%", marginBottom:4}} />
         <button onClick={commit} disabled={!msg.trim()}>Commit</button>
         <div style={{marginTop:12, color:"var(--text-hi)"}}>GitHub</div>
-        <div style={{fontSize:11, color:"var(--muted)", marginBottom:4}}>{auth?.output || auth?.error || "Checking auth..."}</div>
+        <div style={{display:"flex", gap:4, alignItems:"center", marginBottom:4}}>
+          <button onClick={checkAuth}>Check gh auth</button>
+          <span style={{fontSize:11, color:"var(--muted)"}}>{auth?.output ? "Logged in" : auth?.error ? "Not logged in" : "Not checked"}</span>
+        </div>
         <div style={{display:"flex", gap:4, marginBottom:4}}>
           <input value={repoName} onChange={e=>setRepoName(e.target.value)} placeholder="Repository name" style={{flex:1}} />
           <label style={{display:"flex", alignItems:"center", gap:2}}><input type="checkbox" checked={privateRepo} onChange={e=>setPrivateRepo(e.target.checked)} />Private</label>
