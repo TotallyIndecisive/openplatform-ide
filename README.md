@@ -61,3 +61,33 @@ Every capability the IDE has, in the order it was implemented, with the date it 
 | ⌘B | Toggle sidebar |
 | ⌘W | Close tab |
 | ⌃\` | Toggle terminal |
+
+## Reliability and C++ tooling update (24 October 2026)
+
+See [the capability review](docs/ide-capabilities.md) for implemented changes, hardware
+validation, and the remaining work toward full IDE parity.
+
+Upload now uses one incremental PlatformIO invocation. Select a build environment and
+port in the toolbar; Stop cancels the active task. The monitor releases the port before
+upload and resumes afterward. Failed saves prevent build/upload, and external file
+changes produce a conflict instead of being silently overwritten.
+
+C++ features use a locally installed `clangd`. Open the command palette and run
+**Build: Generate Compilation Database** after opening a project or changing its board,
+flags, or dependencies. F12 navigates to definitions. Completion, hover, references,
+formatting, live diagnostics and a compiler Problems panel are available.
+
+The palette also exposes Clean, Static Analysis, Run Tests, Install Dependencies,
+Check Toolchain, Reload File, and Arduino Uno/Nano project templates. ESP32 remains
+the default. Libraries and advanced board settings stay in `platformio.ini`.
+
+```sh
+npm test
+npm run test:backend
+npm run build
+npm run tauri -- build --debug --bundles app  # local macOS test bundle
+```
+
+Tests use Node's TypeScript stripping (Node 22.6+). The hardware example is in
+`examples/esp32-led`; it toggles GPIO 23 and logs to serial at 115200 baud. The Uno
+example uses `LED_BUILTIN`. Only flash the example for the board actually connected.

@@ -1,0 +1,4 @@
+# GCC-only flags have no clang parser equivalent. Firmware is still built by
+# the real PlatformIO compiler with the original flags.
+CompileFlags:
+  Remove: [-mlongcalls, -mdisable-hardware-atomics, -fstrict-volatile-bitfields, -fno-tree-switch-conversion]

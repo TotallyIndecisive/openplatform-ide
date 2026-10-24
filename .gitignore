@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Firmware build and C++ index artifacts
+**/.pio/
+**/compile_commands.json
+**/.cache/
+!.vscode/tasks.json
+!.vscode/launch.json

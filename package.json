@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test": "node --experimental-strip-types --test scripts/diagnostics.test.ts",
+    "test:backend": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

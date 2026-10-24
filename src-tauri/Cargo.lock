@@ -2425,6 +2425,7 @@ dependencies = [
 name = "openplatform-ide"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "portable-pty",
  "serde",
  "serde_json",
@@ -2433,6 +2434,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tempfile",
 ]
 
 [[package]]

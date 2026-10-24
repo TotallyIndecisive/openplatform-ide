@@ -1,0 +1,10 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    { "label": "IDE: run desktop", "type": "shell", "command": "npm run tauri dev", "isBackground": true, "problemMatcher": [] },
+    { "label": "IDE: frontend build", "type": "shell", "command": "npm run build", "group": "build", "problemMatcher": "$tsc" },
+    { "label": "IDE: backend tests", "type": "shell", "command": "cargo test --manifest-path src-tauri/Cargo.toml", "group": "test", "problemMatcher": "$rustc" },
+    { "label": "ESP32 example: verify", "type": "shell", "command": "pio run -d examples/esp32-led -e esp32dev", "problemMatcher": "$gcc" },
+    { "label": "ESP32 example: upload", "type": "shell", "command": "pio run -d examples/esp32-led -e esp32dev -t upload", "problemMatcher": "$gcc" }
+  ]
+}

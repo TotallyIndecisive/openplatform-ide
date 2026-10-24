@@ -1,19 +1,22 @@
-use std::io::{BufRead, BufReader, Read};
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
+mod tooling;
+mod tasks;
+mod language;
 
-const PIO: &str = "/Users/smckenzie/.platformio/penv/bin/pio";
+
 
 
 // ---------------------------------------------------------------- helpers ---
 
 fn home() -> String {
-    std::env::var("HOME").unwrap_or_else(|_| "/Users/smckenzie".into())
+    std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".into())
 }
 fn config_dir() -> String {
     let h = home();
@@ -41,6 +44,8 @@ static ESPTOOL_BIN_CACHE: OnceLock<Option<String>> = OnceLock::new();
 fn esptool_bin() -> Option<String> {
     ESPTOOL_BIN_CACHE
         .get_or_init(|| {
+            let pio_tool = PathBuf::from(home()).join(".platformio/packages/tool-esptoolpy/esptool.py");
+            if pio_tool.is_file() { return Some(pio_tool.to_string_lossy().into()); }
             let base = PathBuf::from(home())
                 .join(".openplatform-ide/Arduino15/packages/esp32/tools/esptool_py");
             let entries = std::fs::read_dir(&base).ok()?;
@@ -128,8 +133,11 @@ struct ChipInfo {
 
 /// Run one `esptool <sub>` invocation against a port; returns (ok, combined output).
 fn run_esptool(esptool: &str, port: &str, sub: &str) -> Option<(bool, String)> {
-    let o = Command::new(esptool)
-        .args(["--port", port, sub])
+    let mut cmd = if esptool.ends_with(".py") {
+        let mut c = Command::new(PathBuf::from(home()).join(if cfg!(windows) {".platformio/penv/Scripts/python.exe"} else {".platformio/penv/bin/python"}));
+        c.arg(esptool); c
+    } else { Command::new(esptool) };
+    let o = cmd.args(["--port", port, sub])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -215,68 +223,10 @@ async fn identify_chip(port: String) -> ChipInfo {
 
 // ---------------------------------------------------------- cli streaming ---
 
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CliOutput {
-    stream: String,
-    line: String,
-}
-
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CliExit {
-    code: Option<i32>,
-    args: Vec<String>,
-}
-
-/// Spawn a PlatformIO Core run (`pio run`, …) and stream its output to the
-/// webview as `cli-output` events, ending with a `cli-exit` event.
-///
-/// Returns as soon as the process is spawned — the `wait()` happens on a
-/// background thread, so a long compile/upload never freezes the webview.
-#[tauri::command]
-fn cli_start(app: tauri::AppHandle, cwd: Option<String>, args: Vec<String>) -> Result<(), String> {
-    let mut cmd = Command::new(PIO);
-    if let Some(ref d) = cwd {
-        cmd.current_dir(d);
-    }
-    cmd.args(&args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = cmd.spawn().map_err(|e| format!("spawn pio: {e}"))?;
-    let stdout = child.stdout.take().ok_or("no stdout")?;
-    let stderr = child.stderr.take().ok_or("no stderr")?;
-
-    let a1 = app.clone();
-    let t1 = thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            let _ = a1.emit("cli-output", CliOutput { stream: "stdout".into(), line });
-        }
-    });
-    let a2 = app.clone();
-    let t2 = thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            let _ = a2.emit("cli-output", CliOutput { stream: "stderr".into(), line });
-        }
-    });
-
-    // The waiter is what used to run on the main thread and beachball the UI.
-    let a3 = app.clone();
-    thread::spawn(move || {
-        let status = child.wait();
-        let _ = t1.join();
-        let _ = t2.join();
-        let code = status.ok().and_then(|s| s.code());
-        let _ = a3.emit("cli-exit", CliExit { code, args });
-    });
-    Ok(())
-}
-
 /// Open a folder in VS Code (so changes are visible in real time).
 #[tauri::command]
 fn open_in_vscode(path: String) -> Result<(), String> {
-    Command::new("/opt/homebrew/bin/code")
+    Command::new(tooling::resolve("code", "OPENPLATFORM_CODE", &["/opt/homebrew/bin/code".into(), "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code".into()])?)
         .arg(path)
         .spawn()
         .map(|_| ())
@@ -303,7 +253,11 @@ const LANG_INCLUDES: &[&str] = &[
 /// Prefers `rg` (the same engine Zed shells out to); falls back to an
 /// in-process walk so the overlay still works on a machine without ripgrep.
 #[tauri::command]
-fn search_text(root: String, query: String, case_sensitive: bool) -> Result<Vec<FileHit>, String> {
+async fn search_text(root: String, query: String, case_sensitive: bool) -> Result<Vec<FileHit>, String> {
+    tauri::async_runtime::spawn_blocking(move || search_text_blocking(root, query, case_sensitive)).await.map_err(|e| e.to_string())?
+}
+
+fn search_text_blocking(root: String, query: String, case_sensitive: bool) -> Result<Vec<FileHit>, String> {
     if query.is_empty() {
         return Ok(Vec::new());
     }
@@ -311,10 +265,11 @@ fn search_text(root: String, query: String, case_sensitive: bool) -> Result<Vec<
     // --- preferred: ripgrep with the source globs from LANG_INCLUDES ---
     for rg in ["/opt/homebrew/bin/rg", "/usr/local/bin/rg", "rg"] {
         let mut cmd = Command::new(rg);
-        cmd.args(["--json", "--with-filename", "--line-number", "--max-count", "50"]);
+        cmd.args(["--fixed-strings", "--json", "--with-filename", "--line-number", "--max-count", "50"]);
         if !case_sensitive {
             cmd.arg("-i");
         }
+        for ignored in TREE_IGNORES { cmd.arg("-g").arg(format!("!**/{ignored}/**")); }
         for glob in LANG_INCLUDES {
             cmd.arg("-g").arg(glob);
         }
@@ -369,6 +324,7 @@ fn search_text(root: String, query: String, case_sensitive: bool) -> Result<Vec<
                 continue;
             }
             let path = entry.path();
+            if entry.file_type().map(|t| t.is_symlink()).unwrap_or(true) { continue; }
             if path.is_dir() {
                 stack.push(path);
                 continue;
@@ -410,15 +366,11 @@ struct Symbol {
     line: u32,
 }
 
-/// Outline for the current file — declarations and their kinds (`Cmd+Shift+O`).
-///
-/// A tree-sitter/clangd outline is not available here: Apple's `clangd` has no
-/// symbol dump (`--symbol-info` is gone), and the ESP32 toolchain's own clangd
-/// is not shipped with PlatformIO. C/C++ declarations have a small, regular
-/// surface, so a declaration scan is both accurate enough for navigation and
-/// instant. This mirrors how Zed shows function/type entries in its outline.
+/// Lightweight outline for the current in-memory file, also available without
+/// clangd. This declaration scanner is approximate for macros and templates.
 #[tauri::command]
-fn document_symbols(path: String) -> Result<Vec<Symbol>, String> {
+fn document_symbols(path: String, content: Option<String>) -> Result<Vec<Symbol>, String> {
+    if let Some(text) = content { return Ok(scan_declarations(&text)); }
     let text = std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))?;
     Ok(scan_declarations(&text))
 }
@@ -591,10 +543,10 @@ struct AppPaths {
 #[tauri::command]
 fn app_paths() -> AppPaths {
     let home = home();
-    let project_dir = format!("{home}/.openplatform-ide/projects/BlinkPIO");
+    let project_dir = std::env::var("OPENPLATFORM_PROJECT").ok().or_else(|| load_recent().into_iter().find(|p| PathBuf::from(p).join("platformio.ini").is_file()));
     AppPaths {
         sketch_dir: format!("{home}/.openplatform-ide/Arduino"),
-        project_dir: Some(project_dir),
+        project_dir,
         esptool: esptool_bin(),
         home,
     }
@@ -608,10 +560,14 @@ fn write_pio_project(
     src_content: String,
 ) -> Result<String, String> {
     let dir = PathBuf::from(&project_dir);
+    if dir.exists() && std::fs::read_dir(&dir).map_err(|e| e.to_string())?.next().is_some() { return Err("Choose an empty folder; existing project files will not be overwritten".into()); }
     let src_dir = dir.join("src");
     std::fs::create_dir_all(&src_dir).map_err(|e| format!("mkdir: {e}"))?;
     std::fs::write(dir.join("platformio.ini"), platformio_ini).map_err(|e| format!("write ini: {e}"))?;
     std::fs::write(src_dir.join("main.cpp"), src_content).map_err(|e| format!("write src: {e}"))?;
+    for child in ["include", "lib", "test"] { std::fs::create_dir_all(dir.join(child)).map_err(|e| e.to_string())?; }
+    tooling::configure_language(project_dir.clone())?;
+    std::fs::write(dir.join(".gitignore"), ".pio/\ncompile_commands.json\n.cache/\n").map_err(|e| e.to_string())?;
     let _ = add_recent(project_dir.clone());
     Ok(dir.to_string_lossy().to_string())
 }
@@ -637,7 +593,7 @@ struct FileNode {
 /// Directories never worth walking for a PlatformIO/Arduino project.
 const TREE_IGNORES: &[&str] = &[
     ".git", ".pio", ".vscode", ".idea", "node_modules", "target", ".DS_Store",
-    "managed_components", "build",
+    "managed_components", "build", ".cache", "compile_commands.json",
 ];
 
 /// List one directory level. The panel is virtualized and loads per-directory,
@@ -674,19 +630,42 @@ fn list_dir(path: String) -> Result<Vec<FileNode>, String> {
 /// Read any text file in the workspace (the tab `Item`).
 #[tauri::command]
 fn read_file(path: String) -> Result<String, String> {
+    if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > 8 * 1024 * 1024 { return Err("This file exceeds the 8 MiB text editor limit".into()); }
     std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))
 }
 
 /// Write any text file in the workspace.
 #[tauri::command]
-fn write_file(path: String, content: String) -> Result<(), String> {
-    std::fs::write(&path, content).map_err(|e| format!("write {path}: {e}"))
+fn write_file(path: String, content: String, expected: Option<String>) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+    let target = if target.exists() { target.canonicalize().map_err(|e| e.to_string())? } else { target };
+    if let Some(expected) = expected {
+        let disk = std::fs::read_to_string(&target).map_err(|e| format!("Cannot verify {path}: {e}"))?;
+        if disk != expected { return Err(format!("{path} changed on disk. Reload it before saving; your edits are still in the tab.")); }
+    }
+    let parent = target.parent().ok_or("Missing parent directory")?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+    if let Ok(meta) = std::fs::metadata(&target) { temp.as_file().set_permissions(meta.permissions()).map_err(|e| e.to_string())?; }
+    temp.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+    temp.as_file().sync_all().map_err(|e| e.to_string())?;
+    temp.persist(&target).map_err(|e| format!("save {path}: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn create_file(path: String) -> Result<(), String> {
+    std::fs::OpenOptions::new().write(true).create_new(true).open(path)
+        .map(|_| ()).map_err(|e| format!("Create file: {e}"))
 }
 
 /// Walk a project once and return every file, for the fuzzy file finder
 /// (`Cmd+P`). Skips heavy/ignored directories and stops at a bounded count.
 #[tauri::command]
-fn search_files(root: String, query: String) -> Result<Vec<String>, String> {
+async fn search_files(root: String, query: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || search_files_blocking(root, query)).await.map_err(|e| e.to_string())?
+}
+
+fn search_files_blocking(root: String, query: String) -> Result<Vec<String>, String> {
     let q = query.to_lowercase();
     let mut hits: Vec<String> = Vec::new();
     let mut stack = vec![PathBuf::from(&root)];
@@ -706,6 +685,7 @@ fn search_files(root: String, query: String) -> Result<Vec<String>, String> {
                 continue;
             }
             let path = entry.path();
+            if entry.file_type().map(|t| t.is_symlink()).unwrap_or(true) { continue; }
             if path.is_dir() {
                 stack.push(path);
             } else {
@@ -736,19 +716,28 @@ fn add_recent(project_dir: String) -> Result<(), String> {
 #[tauri::command]
 fn create_new_project(project_dir: String, platformio_ini: String, src_content: String) -> Result<String, String> {
     let dir = PathBuf::from(&project_dir);
+    if dir.exists() && std::fs::read_dir(&dir).map_err(|e| e.to_string())?.next().is_some() { return Err("Choose an empty folder; existing project files will not be overwritten".into()); }
     let src_dir = dir.join("src");
     std::fs::create_dir_all(&src_dir).map_err(|e| format!("mkdir: {e}"))?;
     std::fs::write(dir.join("platformio.ini"), platformio_ini).map_err(|e| format!("write ini: {e}"))?;
     std::fs::write(src_dir.join("main.cpp"), src_content).map_err(|e| format!("write src: {e}"))?;
+    for child in ["include", "lib", "test"] { std::fs::create_dir_all(dir.join(child)).map_err(|e| e.to_string())?; }
+    tooling::configure_language(project_dir.clone())?;
+    std::fs::write(dir.join(".gitignore"), ".pio/\ncompile_commands.json\n.cache/\n").map_err(|e| e.to_string())?;
     let _ = add_recent(project_dir.clone());
     Ok(dir.to_string_lossy().to_string())
 }
 
 // -------------------------------------------------------- serial monitor ---
 
+struct SerialSession {
+    stop: Arc<AtomicBool>,
+    thread: thread::JoinHandle<()>,
+    writer: Box<dyn serialport::SerialPort>,
+}
 #[derive(Default)]
 struct SerialState {
-    stop: Mutex<Option<Arc<AtomicBool>>>,
+    session: Mutex<Option<SerialSession>>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -777,13 +766,9 @@ fn serial_start(
     port: String,
     baud: u32,
 ) -> Result<(), String> {
-    // Stop any previous monitor first.
-    if let Some(prev) = state.stop.lock().unwrap().take() {
-        prev.store(true, Ordering::SeqCst);
-    }
+    serial_stop_inner(&state);
+    let mut slot = state.session.lock().map_err(|e| e.to_string())?;
     let stop = Arc::new(AtomicBool::new(false));
-    *state.stop.lock().unwrap() = Some(stop.clone());
-
     let mut p = serialport::new(&port, baud)
         .timeout(Duration::from_millis(120))
         .open()
@@ -793,7 +778,9 @@ fn serial_start(
 
     let a = app.clone();
     let opened_port = port.clone();
-    thread::spawn(move || {
+    let writer = p.try_clone().map_err(|e| e.to_string())?;
+    let signal = stop.clone();
+    let handle = thread::spawn(move || {
         let _ = a.emit(
             "serial-status",
             SerialStatus {
@@ -804,7 +791,7 @@ fn serial_start(
         );
         let mut buf = [0u8; 4096];
         loop {
-            if stop.load(Ordering::SeqCst) {
+            if signal.load(Ordering::SeqCst) {
                 break;
             }
             match p.read(&mut buf) {
@@ -826,6 +813,7 @@ fn serial_start(
             },
         );
     });
+    *slot = Some(SerialSession { stop, thread: handle, writer });
     Ok(())
 }
 
@@ -846,11 +834,24 @@ fn load_pio_project(project_dir: String) -> Result<PioProject, String> {
     let src = std::fs::read_to_string(&src_path).map_err(|e| format!("read src: {e}"))?;
     Ok(PioProject { ini, src })
 }
-#[tauri::command]
-fn serial_stop(state: tauri::State<SerialState>) {
-    if let Some(s) = state.stop.lock().unwrap().take() {
-        s.store(true, Ordering::SeqCst);
+fn serial_stop_inner(state: &SerialState) {
+    let mut slot = state.session.lock().unwrap();
+    if let Some(s) = slot.take() {
+        s.stop.store(true, Ordering::SeqCst);
+        drop(s.writer);
+        // The reader has a 120ms timeout. Join guarantees that both handles
+        // are closed before esptool/avrdude attempts to claim the port.
+        let _ = s.thread.join();
     }
+}
+#[tauri::command]
+fn serial_stop(state: tauri::State<SerialState>) { serial_stop_inner(&state); }
+
+#[tauri::command]
+fn serial_write(state: tauri::State<SerialState>, data: String) -> Result<(), String> {
+    let mut slot = state.session.lock().map_err(|e| e.to_string())?;
+    let session = slot.as_mut().ok_or("Serial monitor is not open")?;
+    session.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())
 }
 
 // ----------------------------------------------------------------- terminal ---
@@ -1079,10 +1080,27 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(SerialState::default())
         .manage(TerminalState::default())
+        .manage(tasks::TaskState::default())
+        .manage(language::LanguageState::default())
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                tasks::cli_cancel(window.state::<tasks::TaskState>());
+                serial_stop_inner(&window.state::<SerialState>());
+                terminal_stop_inner(&window.state::<TerminalState>());
+                language::stop(&window.state::<language::LanguageState>());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             list_serial_ports,
             identify_chip,
-            cli_start,
+            tasks::cli_start,
+            tasks::cli_cancel,
+            tooling::toolchain_status,
+            tooling::project_environments,
+            tooling::configure_language,
+            language::language_start,
+            language::language_send,
+            language::language_stop,
             open_in_vscode,
             app_paths,
             write_pio_project,
@@ -1093,23 +1111,70 @@ pub fn run() {
             list_dir,
             read_file,
             write_file,
+            create_file,
             search_files,
             search_text,
             document_symbols,
             serial_start,
             serial_stop,
+            serial_write,
             terminal_start,
             terminal_write,
             terminal_resize,
             terminal_stop
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            match event {
+                tauri::RunEvent::ExitRequested { api, .. }
+                    if app.get_webview_window("main").is_some() => {
+                    // Route native Cmd+Q through the same unsaved-buffer guard
+                    // as the window close button.
+                    api.prevent_exit();
+                    let _ = app.emit("app-exit-requested", ());
+                }
+                tauri::RunEvent::Exit => {
+                    tasks::cli_cancel(app.state::<tasks::TaskState>());
+                    serial_stop_inner(&app.state::<SerialState>());
+                    terminal_stop_inner(&app.state::<TerminalState>());
+                    language::stop(&app.state::<language::LanguageState>());
+                }
+                _ => {}
+            }
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_refuses_external_changes_and_preserves_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.cpp").to_string_lossy().to_string();
+        std::fs::write(&path, "external edit").unwrap();
+        assert!(write_file(path.clone(), "my edit".into(), Some("old".into())).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "external edit");
+        write_file(path.clone(), "my edit".into(), Some("external edit".into())).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "my edit");
+    }
+
+    #[test]
+    fn creating_file_or_project_never_overwrites_existing_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.cpp").to_string_lossy().to_string();
+        std::fs::write(&path, "keep me").unwrap();
+        assert!(create_file(path.clone()).is_err());
+        assert!(create_new_project(dir.path().to_string_lossy().into(), "ini".into(), "code".into()).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep me");
+    }
+
+    #[test]
+    fn outline_uses_unsaved_buffer_content() {
+        let symbols = document_symbols("/not/on/disk.cpp".into(), Some("void unsaved() {}".into())).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "unsaved"));
+    }
 
     #[test]
     fn outline_picks_functions_constants_and_types() {

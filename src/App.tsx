@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { connectLanguage } from "./language";
+import { parseDiagnostic, type BuildDiagnostic } from "./diagnostics";
 import { listen } from "@tauri-apps/api/event";
 import { loader, Editor } from "@monaco-editor/react";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog, confirm } from "@tauri-apps/plugin-dialog";
 import * as monaco from "monaco-editor";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import { Terminal } from "@xterm/xterm";
@@ -60,14 +63,6 @@ const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
 const stripAnsi = (s: string) => s.replace(ANSI, "");
 const MAX_SERIAL = 20000;
 
-function djb2(s: string) {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) + h) + s.charCodeAt(i);
-  }
-  return h.toString(36);
-}
-
 /** Extension → Monaco language. Only what a PlatformIO project needs. */
 function languageFor(name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
@@ -121,14 +116,26 @@ export default function App() {
   const [serialOpen, setSerialOpen] = useState(false);
   const [serialText, setSerialText] = useState("");
   const [baud, setBaud] = useState(115200);
-  const [lastCompiledKey, setLastCompiledKey] = useState<string | null>(null);
+  const [environments, setEnvironments] = useState<string[]>([]);
+  const [environment, setEnvironment] = useState("");
+  const [diagnostics, setDiagnostics] = useState<BuildDiagnostic[]>([]);
+  const [languageStatus, setLanguageStatus] = useState("C++ idle");
+  const [languageRevision, setLanguageRevision] = useState(0);
+  const [serialInput, setSerialInput] = useState("");
+  const [lineEnding, setLineEnding] = useState("\n");
+  const taskLock = useRef(false);
+  const cancelRequested = useRef(false);
+  const jobRef = useRef<{id: string; root: string} | null>(null);
+  const eventsReady = useRef<Promise<unknown>>(Promise.resolve());
+  const serialOpenRef = useRef(false);
+  serialOpenRef.current = serialOpen;
 
   // --- workspace: buffers (tabs), tree, panel, overlays ---
   const [buffers, setBuffers] = useState<Buffer[]>([]);
   const [activePath, setActivePath] = useState<string>("");
   const [treeRoot, setTreeRoot] = useState<FileNode[]>([]);
   const [expanded, setExpanded] = useState<Record<string, FileNode[]>>({});
-  const [panel, setPanel] = useState<"files" | "outline" | "serial">("files");
+  const [panel, setPanel] = useState<"files" | "outline" | "serial" | "problems">("files");
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelWidth, setPanelWidth] = useState(240);
   const [outline, setOutline] = useState<Symbol[]>([]);
@@ -137,7 +144,7 @@ export default function App() {
   const [overlaySel, setOverlaySel] = useState(0);
   const [overlayItems, setOverlayItems] = useState<Item[]>([]);
   const [cursor, setCursor] = useState({ line: 1, col: 1 });
-  const [buildState, setBuildState] = useState<"idle" | "ok" | "err">("idle");
+  const [buildState, setBuildState] = useState<"idle" | "ok" | "err" | "cancelled">("idle");
 
   // The bottom region shows exactly one view at a time: the terminal or the
   // build/upload output. `null` means the region is collapsed.
@@ -165,10 +172,10 @@ export default function App() {
   // cli-exit handoff: lets sequential steps (compile -> upload) await completion
   // without a race between `invoke` resolving and the exit event arriving.
   const exitResolver = useRef<((code: number | null) => void) | null>(null);
-  const pendingExit = useRef<number | null | undefined>(undefined);
+
 
   const log = useCallback(
-    (s: string) => setOut((o) => [...o, ...(Array.isArray(s) ? s : [s])]),
+    (s: string) => setOut((o) => [...o, s].slice(-3000)),
     []
   );
 
@@ -177,20 +184,11 @@ export default function App() {
       const r = exitResolver.current;
       exitResolver.current = null;
       r(code);
-    } else {
-      pendingExit.current = code;
     }
   }
 
   function waitExit(): Promise<number | null> {
-    if (pendingExit.current !== undefined) {
-      const c = pendingExit.current;
-      pendingExit.current = undefined;
-      return Promise.resolve(c);
-    }
-    return new Promise((resolve) => {
-      exitResolver.current = resolve;
-    });
+    return new Promise(resolve => { exitResolver.current = resolve; });
   }
 
   const active = buffers.find((b) => b.path === activePath) ?? null;
@@ -203,7 +201,7 @@ export default function App() {
       const p = await invoke<Port[]>("list_serial_ports");
       setPorts(p);
       const usb = p.find((x) => x.isUsb);
-      setPort((cur) => cur || usb?.address || "");
+      setPort((cur) => p.some(x => x.address === cur) ? cur : usb?.address || "");
     } catch (e) {
       log(`scan error: ${e}`);
     }
@@ -221,24 +219,28 @@ export default function App() {
   // ---- startup + event wiring ----
   useEffect(() => {
     const offs: Array<Promise<() => void>> = [];
+    offs.push(listen("app-exit-requested", () => { void getCurrentWindow().close(); }));
     offs.push(
-      listen<{ stream: string; line: string }>("cli-output", (e) => {
+      listen<{ jobId: string; stream: string; line: string }>("cli-output", (e) => {
+        if (e.payload.jobId !== jobRef.current?.id) return;
         const line = stripAnsi(e.payload.line);
-        setOut((o) => [...o, line]);
+        setOut((o) => [...o, line].slice(-3000));
+        const diagnostic = parseDiagnostic(line, jobRef.current.root);
+        if (diagnostic) setDiagnostics(ds => [...ds, diagnostic].slice(-1000));
         if (line.trim()) setStatus(line.trim().slice(0, 140));
         // esptool reports flashing progress as: `Writing at 0x00010000... (42 %)`
-        const m = line.match(/\((\d+)\s*%\)/);
+        const m = line.match(/(?:\(|\s)(\d+(?:\.\d+)?)\s*%/);
         if (m) setProgress(Number(m[1]));
         else if (/Hash of data verified/i.test(line)) setProgress(100);
       })
     );
     offs.push(
-      listen<{ code: number | null; args: string[] }>("cli-exit", (e) => {
-        setBusy(null);
+      listen<{ jobId: string; code: number | null; args: string[]; cancelled: boolean; elapsedMs: number }>("cli-exit", (e) => {
+        if (e.payload.jobId !== jobRef.current?.id) return;
         setProgress(null);
         setStatus("");
-        setBuildState(e.payload.code === 0 ? "ok" : "err");
-        log(`\n[exit ${e.payload.code}] pio ${e.payload.args.join(" ")}`);
+        setBuildState(e.payload.cancelled ? "cancelled" : e.payload.code === 0 ? "ok" : "err");
+        log(`\n[${e.payload.cancelled ? "cancelled" : `exit ${e.payload.code}`} · ${(e.payload.elapsedMs / 1000).toFixed(2)}s] pio ${e.payload.args.join(" ")}`);
         onCliExit(e.payload.code);
       })
     );
@@ -273,15 +275,21 @@ export default function App() {
         }
       )
     );
+    eventsReady.current = Promise.all(offs);
+    const polling = setInterval(scan, 2500);
+    let disposed = false;
     scan();
     loadRecents();
     invoke<{ projectDir?: string; home: string; esptool?: string }>("app_paths")
       .then((p) => {
+        if (disposed) return;
         homeDirRef.current = p.home;
-        openProjectDir(p.projectDir ?? `${p.home}/.openplatform-ide/projects/BlinkPIO`);
+        if (p.projectDir) void openProjectDir(p.projectDir);
       })
       .catch((e) => log(`app_paths error: ${e}`));
     return () => {
+      disposed = true;
+      clearInterval(polling);
       Promise.all(offs).then((fs) => fs.forEach((f) => f()));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -289,7 +297,7 @@ export default function App() {
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
-  }, [out]);
+  }, [out, outOpen]);
   useEffect(() => {
     serRef.current?.scrollTo({ top: serRef.current.scrollHeight });
   }, [serialText]);
@@ -389,7 +397,7 @@ export default function App() {
    * If the user is sitting in the terminal, switch to the output so the run is
    * visible; otherwise leave their current view alone. */
   const revealOutput = useCallback(() => {
-    setBottom((cur) => (cur === "terminal" ? "output" : cur));
+    setBottom("output");
   }, []);
 
   // The host div is always mounted, so attach xterm to it once. This effect
@@ -435,9 +443,9 @@ export default function App() {
    *  next preview; typing (or double-click) promotes it to a pinned tab. */
   const openFile = useCallback(
     async (abs: string, opts: { preview?: boolean; pin?: boolean } = {}) => {
-      const rel = projectDir && abs.startsWith(projectDir)
-        ? abs.slice(projectDir.length).replace(/^\//, "")
-        : baseName(abs);
+      const rel = projectDir && abs.startsWith(projectDir + "/")
+        ? abs.slice(projectDir.length + 1)
+        : abs;
       const existing = buffersRef.current.find((b) => b.path === rel);
       if (existing) {
         if (opts.pin) {
@@ -482,11 +490,11 @@ export default function App() {
   /** Load a PlatformIO project: reset buffers, then open ini + main.cpp. */
   const openProjectDir = useCallback(
     async (dir: string) => {
-      setProjectDir(dir);
-      setActivePath("");
-      setExpanded({});
-      setOutline([]);
-      setLastCompiledKey(null);
+      if (taskLock.current) { log("Wait for the running task before switching projects."); return; }
+      if (buffersRef.current.some(b => b.value !== b.saved) && !await confirm("Discard unsaved edits and switch projects?", { title: "Unsaved files", kind: "warning" })) return;
+      try { await invoke("read_file", {path: `${dir}/platformio.ini`}); }
+      catch (e) { log(`Open failed: ${e}`); return; }
+
 
       // Read everything before touching state, so the reset and the initial
       // tabs land in one commit instead of racing each other.
@@ -508,10 +516,32 @@ export default function App() {
         }
       }
 
+      try {
+        const drafts: Buffer[] = JSON.parse(localStorage.getItem(`drafts:${dir}`) ?? "[]");
+        for (const draft of drafts) {
+          if (!draft.abs?.startsWith(dir + "/") || draft.value === draft.saved) continue;
+          const index = initial.findIndex(b => b.abs === draft.abs);
+          // Keep the original disk baseline so a concurrent external edit is
+          // detected by Save, rather than silently overwritten by recovery.
+          if (index >= 0) initial[index] = {...draft, preview: false};
+          else initial.push({...draft, preview: false});
+        }
+        if (drafts.length) log("Recovered unsaved editor drafts.");
+      } catch { /* A corrupt recovery record must not prevent opening a project. */ }
+      setProjectDir(dir);
+      setExpanded({});
+      setOutline([]);
+      setDiagnostics([]);
       buffersRef.current = initial;
       setBuffers(initial);
       setActivePath(initial[initial.length - 1]?.path ?? "");
 
+      try {
+        const envs = await invoke<string[]>("project_environments", {projectDir: dir});
+        setEnvironments(envs);
+        const savedEnv = localStorage.getItem(`environment:${dir}`);
+        setEnvironment(savedEnv && envs.includes(savedEnv) ? savedEnv : envs[0] ?? "");
+      } catch (e) { setEnvironments([]); setEnvironment(""); log(`PlatformIO configuration: ${e}`); }
       await refreshTree(dir);
       invoke("add_recent", { projectDir: dir }).then(loadRecents).catch(() => {});
       log(`Opened project: ${dir}`);
@@ -549,17 +579,103 @@ export default function App() {
     [expanded, log]
   );
 
-  const closeBuffer = useCallback((path: string) => {
-    setBuffers((bs) => {
-      const idx = bs.findIndex((b) => b.path === path);
-      const next = bs.filter((b) => b.path !== path);
-      if (path === activeRef.current) {
-        const fallback = next[Math.min(idx, next.length - 1)];
-        setActivePath(fallback?.path ?? "");
-      }
+  const closeBuffer = useCallback(async (path: string) => {
+    const buffer = buffersRef.current.find(b => b.path === path);
+    if (buffer && buffer.value !== buffer.saved && !await confirm(`Discard unsaved edits in ${baseName(path)}?`, {title: "Unsaved file", kind: "warning"})) return;
+    setBuffers(bs => {
+      const idx = bs.findIndex(b => b.path === path);
+      const next = bs.filter(b => b.path !== path);
+      if (path === activeRef.current) setActivePath(next[Math.min(idx, next.length - 1)]?.path ?? "");
       return next;
     });
   }, []);
+
+  // Recover dirty buffers after a crash and protect native window close.
+  useEffect(() => {
+    if (!projectDir) return;
+    const timer = setTimeout(() => {
+      try { localStorage.setItem(`drafts:${projectDir}`, JSON.stringify(buffers.filter(b => b.value !== b.saved))); }
+      catch { log("Draft recovery storage is full. Save your open files."); }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [buffers, projectDir, log]);
+
+  useEffect(() => {
+    const off = getCurrentWindow().onCloseRequested(async event => {
+      if (taskLock.current || buffersRef.current.some(b => b.value !== b.saved)) {
+        event.preventDefault();
+        const close = await confirm("Close the IDE? Unsaved edits remain in local recovery and any running task will be stopped.", { title: "Close Openplatform IDE", kind: "warning" });
+        if (close) await getCurrentWindow().destroy();
+      }
+    });
+    return () => { void off.then(f => f()); };
+  }, []);
+
+  // Reload clean files edited in VS Code. Dirty files retain their original
+  // baseline and Save refuses to overwrite conflicting external changes.
+  useEffect(() => {
+    const reload = async () => {
+      for (const b of buffersRef.current) {
+        if (b.value !== b.saved) continue;
+        try {
+          const disk = await invoke<string>("read_file", {path:b.abs});
+          if (disk !== b.saved) setBuffers(bs => bs.map(x => x.abs === b.abs && x.value === b.value && x.saved === b.saved ? {...x, value:disk, saved:disk} : x));
+        } catch { /* Deleted files are reported if the user tries to save. */ }
+      }
+      if (projectDir) void refreshTree(projectDir);
+    };
+    window.addEventListener("focus", reload);
+    return () => window.removeEventListener("focus", reload);
+  }, [projectDir, refreshTree]);
+
+  useEffect(() => {
+    if (!projectDir) return;
+    let stale = false;
+    let connection: { dispose: () => void } | undefined;
+    // Delay startup one tick so StrictMode's discarded mount does not launch
+    // a second native language process.
+    const timer = setTimeout(() => {
+      connectLanguage(projectDir, log, status => { if (!stale) setLanguageStatus(status); })
+        .then(client => { if (stale) client.dispose(); else connection = client; })
+        .catch(e => { if (!stale) { setLanguageStatus("C++ unavailable"); log(`[clangd] ${e}`); } });
+    }, 100);
+    return () => { stale = true; clearTimeout(timer); connection?.dispose(); };
+  }, [projectDir, languageRevision, log]);
+
+  useEffect(() => {
+    const registration = monaco.editor.registerEditorOpener({ openCodeEditor: async (_source, uri, selection) => {
+      if (uri.scheme !== "file") return false;
+      await openFile(uri.fsPath, {pin:true});
+      setTimeout(() => {
+        const ed = editorRef.current;
+        if (!ed || !selection) return;
+        if ("startLineNumber" in selection) { ed.setSelection(selection); ed.revealRangeInCenter(selection); }
+        else { ed.setPosition(selection); ed.revealPositionInCenter(selection); }
+      }, 80);
+      return true;
+    } });
+    return () => registration.dispose();
+  }, [openFile]);
+
+  useEffect(() => {
+    for (const model of monaco.editor.getModels()) {
+      const path = model.uri.fsPath;
+      monaco.editor.setModelMarkers(model, "platformio", diagnostics.filter(d => d.path === path).map(d => ({
+        startLineNumber:d.line, endLineNumber:d.line, startColumn:d.column, endColumn:d.column + 1,
+        message:d.message, severity:d.severity === "error" ? monaco.MarkerSeverity.Error : d.severity === "warning" ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Info,
+      })));
+    }
+  }, [diagnostics, activePath]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const openUris = new Set(buffersRef.current.map(b => monaco.Uri.file(b.abs).toString()));
+      for (const model of monaco.editor.getModels()) {
+        if (model.uri.scheme === "file" && !openUris.has(model.uri.toString()) && editorRef.current?.getModel() !== model) model.dispose();
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [buffers]);
 
   // ---- outline for the active buffer (declaration scan) ----
   useEffect(() => {
@@ -569,7 +685,7 @@ export default function App() {
     }
     let cancelled = false;
     const t = setTimeout(() => {
-      invoke<Symbol[]>("document_symbols", { path: active.abs })
+      invoke<Symbol[]>("document_symbols", { path: active.abs, content: active.value })
         .then((s) => !cancelled && setOutline(s))
         .catch(() => !cancelled && setOutline([]));
     }, 250);
@@ -591,9 +707,9 @@ export default function App() {
 
   async function saveBuffer(b: Buffer): Promise<boolean> {
     try {
-      await invoke("write_file", { path: b.abs, content: b.value });
+      await invoke("write_file", { path: b.abs, content: b.value, expected: b.saved });
       setBuffers((bs) =>
-        bs.map((x) => (x.path === b.path ? { ...x, saved: x.value, preview: false } : x))
+        bs.map((x) => (x.abs === b.abs ? { ...x, saved: b.value, preview: false } : x))
       );
       return true;
     } catch (e) {
@@ -604,9 +720,10 @@ export default function App() {
 
   async function saveAll() {
     for (const b of buffersRef.current) {
-      if (b.value !== b.saved) await saveBuffer(b);
+      if (b.value !== b.saved && !await saveBuffer(b)) return false;
     }
     log("✓ Saved");
+    return true;
   }
 
   async function saveActive() {
@@ -615,7 +732,7 @@ export default function App() {
   }
 
   /** File ▸ New Project — pick a folder, scaffold a PlatformIO project there. */
-  async function newProject() {
+  async function newProject(template: "esp32" | "uno" | "nano" = "esp32") {
     setMenuOpen(false);
     const dest = await saveDialog({
       title: "Create new PlatformIO project",
@@ -626,8 +743,8 @@ export default function App() {
     try {
       const dir = await invoke<string>("create_new_project", {
         projectDir: dest,
-        platformioIni: DEFAULT_PIO_INI,
-        srcContent: DEFAULT_SRC,
+        platformioIni: template === "esp32" ? DEFAULT_PIO_INI : `[env:${template}]\nplatform = atmelavr\nboard = ${template === "uno" ? "uno" : "nanoatmega328"}\nframework = arduino\nmonitor_speed = 115200\n`,
+        srcContent: template === "esp32" ? DEFAULT_SRC : DEFAULT_SRC.replace("#define LED_PIN 23", "#define LED_PIN LED_BUILTIN"),
       });
       await openProjectDir(dir);
       log(`Created project: ${dir}`);
@@ -705,7 +822,7 @@ export default function App() {
     });
     if (typeof dest !== "string") return;
     try {
-      await invoke("write_file", { path: dest, content: "" });
+      await invoke("create_file", { path: dest });
       await refreshTree(projectDir);
       await openFile(dest, { pin: true });
       log(`Created file: ${dest.replace(projectDir + "/", "")}`);
@@ -723,6 +840,8 @@ export default function App() {
   const commands = useMemo(
     () => [
       ["File: New Project", "⇧⌘N"],
+      ["File: New Arduino Uno Project", ""],
+      ["File: New Arduino Nano Project", ""],
       ["File: Open Project", "⌘O"],
       ["File: New File", ""],
       ["File: Save", "⌘S"],
@@ -735,6 +854,17 @@ export default function App() {
       ["Panel: Toggle Sidebar", "⌘B"],
       ["Build: Verify", ""],
       ["Build: Upload", ""],
+      ["Build: Cancel", ""],
+      ["Build: Clean", ""],
+      ["Build: Generate Compilation Database", ""],
+      ["Build: Static Analysis", ""],
+      ["Build: Run Tests", ""],
+      ["Project: Install Dependencies", ""],
+      ["Tools: Check Toolchain", ""],
+      ["C++: Restart Language Server", ""],
+      ["Editor: Format Document", ""],
+      ["Editor: Reload File from Disk", ""],
+      ["Panel: Show Problems", ""],
       ["Device: Refresh Ports", "⟳"],
       ["Device: Identify Chip", ""],
       ["Serial: Toggle Monitor", ""],
@@ -761,7 +891,9 @@ export default function App() {
 
   // Keep the action table pointing at the newest closures on every render.
   actionsRef.current = {
-    "File: New Project": newProject,
+    "File: New Project": () => newProject(),
+    "File: New Arduino Uno Project": () => newProject("uno"),
+    "File: New Arduino Nano Project": () => newProject("nano"),
     "File: Open Project": openProject,
     "File: New File": newFile,
     "File: Save": () => saveActive(),
@@ -775,6 +907,26 @@ export default function App() {
     "Panel: Toggle Sidebar": () => setPanelOpen((v) => !v),
     "Build: Verify": () => verify(),
     "Build: Upload": () => upload(),
+    "Build: Cancel": () => cancelTask(),
+    "Build: Clean": () => projectTask(["run", "-t", "clean"], "cleaning"),
+    "Build: Generate Compilation Database": async () => {
+      if (await projectTask(["run", "-t", "compiledb"], "indexing") === 0) {
+        try { await invoke("configure_language", {projectDir}); setLanguageRevision(n => n + 1); }
+        catch (e) { log(`C++ configuration: ${e}`); }
+      }
+    },
+    "Build: Static Analysis": () => projectTask(["check"], "analyzing"),
+    "Build: Run Tests": () => projectTask(["test"], "testing"),
+    "Project: Install Dependencies": () => projectTask(["pkg", "install"], "installing"),
+    "Tools: Check Toolchain": async () => { revealOutput(); log(JSON.stringify(await invoke("toolchain_status"), null, 2)); },
+    "C++: Restart Language Server": () => setLanguageRevision(n => n + 1),
+    "Editor: Format Document": () => editorRef.current?.getAction("editor.action.formatDocument")?.run(),
+    "Editor: Reload File from Disk": async () => {
+      if (!active || (active.value !== active.saved && !await confirm("Discard edits and reload this file?", {kind:"warning"}))) return;
+      try { const value = await invoke<string>("read_file", {path:active.abs}); setBuffers(bs => bs.map(b => b.abs === active.abs ? {...b, value, saved:value} : b)); }
+      catch (e) { log(`Reload failed: ${e}`); }
+    },
+    "Panel: Show Problems": () => { setPanel("problems"); setPanelOpen(true); },
     "Device: Refresh Ports": () => scan(),
     "Device: Identify Chip": () => identify(),
     "Serial: Toggle Monitor": () => toggleSerial(),
@@ -823,10 +975,12 @@ export default function App() {
     if (overlay !== "finder" && overlay !== "search") return;
     if (!projectDir) return;
     const q = overlayQuery;
+    let stale = false;
     const t = setTimeout(async () => {
       try {
         if (overlay === "finder") {
           const files = await invoke<string[]>("search_files", { root: projectDir, query: q });
+          if (stale) return;
           setOverlayItems(
             files.slice(0, 200).map((f) => ({
               label: f.split("/").pop() ?? f,
@@ -844,6 +998,7 @@ export default function App() {
             query: q,
             caseSensitive: false,
           });
+          if (stale) return;
           setOverlayItems(
             hits.slice(0, 300).map((h) => ({
               label: h.text.trim().slice(0, 120),
@@ -860,7 +1015,7 @@ export default function App() {
         log(`search error: ${e}`);
       }
     }, overlay === "finder" ? 60 : 220);
-    return () => clearTimeout(t);
+    return () => { stale = true; clearTimeout(t); };
   }, [overlay, overlayQuery, projectDir, openFile, log]);
 
   useEffect(() => {
@@ -906,84 +1061,67 @@ export default function App() {
 
   // ============================================================ build/upload ===
 
-  /** Run one pio invocation; resolves with its exit code. */
-  async function runCli(
-    args: string[],
-    cwd: string,
-    label: string,
-    prefix?: string
-  ): Promise<number | null> {
-    if (serialOpen) await stopSerial();
+  /** The backend and this immediate ref both enforce one task at a time.
+   * Upload uses a single incremental PlatformIO run; dependency tracking also
+   * observes headers and files edited outside the open tabs. */
+  async function projectTask(args: string[], label: string, needsPort = false): Promise<number | null> {
+    if (taskLock.current || !projectDir || (needsPort && !port)) return -1;
+    taskLock.current = true;
+    cancelRequested.current = false;
+    const restoreMonitor = (needsPort || args[0] === "test") && serialOpenRef.current;
+    const monitorPort = port;
     setBusy(label);
     setProgress(null);
-    setStatus("");
-    // A compile/upload is starting: if the terminal is showing, swap to output.
+    setDiagnostics([]);
     revealOutput();
-    if (prefix) log(`\n--- ${prefix} ---`);
-    const done = waitExit();
+    const id = crypto.randomUUID();
     try {
-      await invoke("cli_start", { cwd, args });
-    } catch (e) {
-      log(`${label} error: ${e}`);
-      exitResolver.current = null;
-      setBusy(null);
-      return -1;
-    }
-    return done;
-  }
-
-  /** cwd for pio. The project dir is authoritative; buffers are relative to it. */
-  const pioDir = projectDir;
-  const sourceText = useMemo(
-    () => buffers.map((b) => `${b.path}\u0000${b.value}`).join("\u0001"),
-    [buffers]
-  );
-
-  async function verify() {
-    if (busy || !pioDir) return;
-    await saveAll();
-    const code = await runCli(["run"], pioDir, "compiling", `Verify (build) ${pioDir}`);
-    if (code === 0) {
-      setLastCompiledKey(`${djb2(sourceText)}|pio|${pioDir}`);
-      setBuildState("ok");
-      log("✓ Verify OK");
-    } else {
-      setLastCompiledKey(null);
-      setBuildState("err");
-      log(`✗ Verify failed (exit ${code})`);
-    }
-  }
-
-  async function upload() {
-    if (busy || !port || !pioDir) return;
-    await saveAll();
-    const key = `${djb2(sourceText)}|pio|${pioDir}`;
-    if (lastCompiledKey !== key) {
-      const c = await runCli(["run"], pioDir, "compiling", `Compile ${pioDir}`);
-      if (c !== 0) {
-        setLastCompiledKey(null);
-        setBuildState("err");
-        log(`✗ Compile failed (exit ${c}) — not uploading.`);
-        return;
+      if (!await saveAll()) { log("Task stopped: a file could not be saved."); return -1; }
+      const envs = await invoke<string[]>("project_environments", {projectDir});
+      setEnvironments(envs);
+      if (!envs.length) throw new Error("No [env:name] section in platformio.ini");
+      const selected = envs.includes(environment) ? environment : envs[0];
+      setEnvironment(selected);
+      localStorage.setItem(`environment:${projectDir}`, selected);
+      if (cancelRequested.current) { setBuildState("cancelled"); log("Task cancelled before starting."); return null; }
+      if (needsPort || args[0] === "test") await stopSerial();
+      await eventsReady.current;
+      jobRef.current = {id, root:projectDir};
+      const done = waitExit();
+      const command = [...args, "-e", selected, ...(needsPort ? ["--upload-port", monitorPort] : [])];
+      log(`\n--- ${label}: pio ${command.join(" ")} ---`);
+      try {
+        await invoke("cli_start", {cwd:projectDir, args:command, jobId:id});
+        if (cancelRequested.current) await invoke("cli_cancel");
       }
-      setLastCompiledKey(key);
-      log("✓ Compiled. Uploading…");
-    } else {
-      log("✓ Using cached build. Uploading…");
+      catch (e) { onCliExit(-1); throw e; }
+      const code = await done;
+      setBuildState(code === null ? "cancelled" : code === 0 ? "ok" : "err");
+      log(code === 0 ? `✓ ${label} complete` : `✗ ${label} ${code === null ? "cancelled" : `failed (exit ${code})`}`);
+      return code;
+    } catch (e) { log(`${label}: ${e}`); setBuildState("err"); return -1; }
+    finally {
+      jobRef.current = null;
+      exitResolver.current = null;
+      if (restoreMonitor) {
+        try { await invoke("serial_start", {port:monitorPort, baud}); setSerialOpen(true); }
+        catch (e) { log(`Could not resume serial monitor: ${e}`); }
+      }
+      taskLock.current = false;
+      setBusy(null); setProgress(null); setStatus("");
     }
-    const u = await runCli(
-      ["run", "-t", "upload", "--upload-port", port],
-      pioDir,
-      "uploading",
-      `Upload → ${port}`
-    );
-    setBuildState(u === 0 ? "ok" : "err");
-    log(u === 0 ? "✓ Upload OK — the board is running." : `✗ Upload failed (exit ${u})`);
   }
+
+  function cancelTask() { cancelRequested.current = true; void invoke("cli_cancel").catch(e => log(`Cancel: ${e}`)); }
+
+  async function verify() { await projectTask(["run"], "compiling"); }
+  async function upload() { await projectTask(["run", "-t", "upload"], "uploading", true); }
 
   async function identify() {
-    if (!port || busy) return;
-    if (serialOpen) await stopSerial();
+    if (!port || taskLock.current) return;
+    taskLock.current = true;
+    const restore = serialOpenRef.current;
+    await stopSerial();
     setBusy("identify chip");
     setProgress(null);
     setStatus(`probing ${port}…`);
@@ -997,6 +1135,8 @@ export default function App() {
     } catch (e) {
       log(`identify error: ${e}`);
     } finally {
+      if (restore) { try { await invoke("serial_start", {port, baud}); } catch (e) { log(`Serial resume: ${e}`); } }
+      taskLock.current = false;
       setBusy(null);
       setStatus("");
     }
@@ -1031,8 +1171,8 @@ export default function App() {
   function renderNodes(nodes: FileNode[], depth: number) {
     return nodes.map((n) => {
       const kids = expanded[n.path];
-      const isActive = activePath === n.path;
-      const activeBuf = buffers.find((b) => b.path === n.path);
+      const isActive = active?.abs === n.path;
+      const activeBuf = buffers.find((b) => b.abs === n.path);
       const dirty = activeBuf && activeBuf.value !== activeBuf.saved;
       return (
         <div key={n.path}>
@@ -1055,7 +1195,7 @@ export default function App() {
   }
 
   const panelTitle =
-    panel === "files" ? "Project" : panel === "outline" ? "Outline" : "Serial";
+    panel === "files" ? "Project" : panel === "outline" ? "Outline" : panel === "problems" ? "Problems" : "Serial";
 
   return (
     <div className="wrap" onMouseMove={(e) => e.stopPropagation()}>
@@ -1069,7 +1209,7 @@ export default function App() {
             <>
               <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />
               <div className="menu-drop">
-                <button onClick={newProject}>
+                <button onClick={() => newProject()}>
                   New Project…<span className="accel">⇧⌘N</span>
                 </button>
                 <button onClick={openProject}>
@@ -1132,7 +1272,10 @@ export default function App() {
 
         <div className="actions">
           <button onClick={scan} title="Refresh serial ports">⟳</button>
-          <select value={port} onChange={(e) => setPort(e.target.value)}>
+          <select aria-label="Build environment" value={environment} disabled={!!busy} onChange={e => { setEnvironment(e.target.value); localStorage.setItem(`environment:${projectDir}`, e.target.value); }}>
+            {environments.map(env => <option key={env} value={env}>{env}</option>)}
+          </select>
+          <select aria-label="Serial port" disabled={!!busy || serialOpen} value={port} onChange={(e) => setPort(e.target.value)}>
             <option value="">— port —</option>
             {ports.map((p) => (
               <option key={p.address} value={p.address}>
@@ -1144,12 +1287,13 @@ export default function App() {
           <button onClick={identify} disabled={!port || !!busy}>
             {busy === "identify chip" ? "probing…" : "Identify"}
           </button>
-          <button onClick={verify} disabled={!!busy}>
+          <button onClick={verify} disabled={!!busy || !projectDir}>
             {busy === "compiling" ? "compiling…" : "✓ Verify"}
           </button>
-          <button onClick={upload} disabled={!port || !!busy}>
+          <button onClick={upload} disabled={!port || !!busy || !projectDir}>
             {busy === "uploading" || busy === "compiling" ? "working…" : "↑ Upload"}
           </button>
+          {busy && busy !== "identify chip" && <button onClick={cancelTask} title="Cancel task">■ Stop</button>}
           <button onClick={openPalette} title="Command palette">⌘</button>
         </div>
       </div>
@@ -1204,6 +1348,7 @@ export default function App() {
           >
             ⌁
           </button>
+          <button title={`Problems (${diagnostics.length})`} onClick={() => { setPanel("problems"); setPanelOpen(true); }}>!</button>
           <span className="rail-spacer" />
           <button
             className={outOpen ? "active" : ""}
@@ -1263,6 +1408,11 @@ export default function App() {
                     </div>
                   ))}
 
+                {panel === "problems" && (diagnostics.length ? diagnostics.map((d, i) => (
+                  <div className="outline-row" key={i} title={d.message} onClick={async () => { await openFile(d.path, {pin:true}); setTimeout(() => gotoLine(d.line), 80); }}>
+                    <span className="kind">{d.severity}</span><span className="nm">{baseName(d.path)}:{d.line} — {d.message}</span>
+                  </div>
+                )) : <div className="tree-empty">No compiler diagnostics. Verify to check the project.</div>)}
                 {panel === "serial" && (
                   <div className="serial-panel">
                     <div className="serial-tools">
@@ -1275,13 +1425,18 @@ export default function App() {
                           <option key={b} value={b}>{b}</option>
                         ))}
                       </select>
-                      <button onClick={toggleSerial} disabled={!port || !!busy}>
+                      <button onClick={toggleSerial} disabled={!serialOpen && (!port || !!busy)}>
                         {serialOpen ? "■ Stop" : "▷ Start"}
                       </button>
                       <span style={{ color: "var(--muted)", fontSize: 11 }}>
                         {serialOpen ? `● ${port}` : "○ stopped"}
                       </span>
                     </div>
+                    <form onSubmit={async e => { e.preventDefault(); try { await invoke("serial_write", {data:serialInput + lineEnding}); setSerialInput(""); } catch (error) { log(`Serial send: ${error}`); } }}>
+                      <input aria-label="Serial message" placeholder="Send to board…" value={serialInput} onChange={e => setSerialInput(e.target.value)} disabled={!serialOpen} />
+                      <select aria-label="Line ending" value={lineEnding} onChange={e => setLineEnding(e.target.value)}><option value="">None</option><option value={"\n"}>LF</option><option value={"\r\n"}>CRLF</option></select>
+                      <button disabled={!serialOpen} type="submit">Send</button>
+                    </form>
                     <pre ref={serRef} className="serial">{serialText || "—"}</pre>
                   </div>
                 )}
@@ -1349,7 +1504,8 @@ export default function App() {
                   language={activeLang}
                   theme="vs-dark"
                   value={activeValue}
-                  path={active.path}
+                  path={monaco.Uri.file(active.abs).toString()}
+                  keepCurrentModel
                   onChange={(v) => updateActive(v ?? "")}
                   onMount={(ed) => {
                     editorRef.current = ed;
@@ -1439,7 +1595,7 @@ export default function App() {
           onClick={toggleOutput}
           title="Build & upload output"
         >
-          {buildState === "idle" ? "○ ready" : buildState === "ok" ? "✓ ok" : "✗ failed"}
+          {buildState === "idle" ? "○ ready" : buildState === "ok" ? "✓ ok" : buildState === "cancelled" ? "○ cancelled" : "✗ failed"}
           {busy ? ` · ${busy}` : ""}
         </span>
         <span className="sb-item click" onClick={() => { setPanel("serial"); setPanelOpen(true); }}>
@@ -1459,7 +1615,7 @@ export default function App() {
             <span className="sb-item">Ln {cursor.line}, Col {cursor.col}</span>
           </>
         )}
-        <span className="sb-item">openplatform-ide</span>
+        <span className="sb-item click" title="Restart C++ language server" onClick={() => setLanguageRevision(n => n + 1)}>{languageStatus}</span>
       </div>
 
       {/* -------------------------------------------------------- modal_layer */}
