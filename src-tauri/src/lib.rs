@@ -673,6 +673,93 @@ fn git_init(project_dir: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+fn git_push(project_dir: String, remote: Option<String>, branch: Option<String>) -> Result<serde_json::Value, String> {
+    let r = remote.unwrap_or_else(|| "origin".to_string());
+    let mut args = vec!["-C".to_string(), project_dir.clone(), "push".to_string(), "-u".to_string(), r.clone()];
+    if let Some(b) = branch {
+        args.push(b);
+    }
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let out = Command::new("git").args(args_ref).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn git_pull(project_dir: String, remote: Option<String>, branch: Option<String>) -> Result<serde_json::Value, String> {
+    let r = remote.unwrap_or_else(|| "origin".to_string());
+    let mut args = vec!["-C".to_string(), project_dir.clone(), "pull".to_string(), r.clone()];
+    if let Some(b) = branch {
+        args.push(b);
+    }
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let out = Command::new("git").args(args_ref).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn git_remote_add(project_dir: String, name: String, url: String) -> Result<serde_json::Value, String> {
+    let out = Command::new("git").args(["-C", &project_dir, "remote", "add", &name, &url]).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn git_remote_list(project_dir: String) -> Result<serde_json::Value, String> {
+    let out = Command::new("git").args(["-C", &project_dir, "remote", "-v"]).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn git_checkout(project_dir: String, branch: String, create: bool) -> Result<serde_json::Value, String> {
+    let mut args = vec!["-C".to_string(), project_dir.clone(), "checkout".to_string()];
+    if create { args.push("-b".to_string()); }
+    args.push(branch);
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let out = Command::new("git").args(args_ref).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn gh_auth_status() -> Result<serde_json::Value, String> {
+    let out = Command::new("gh").args(["auth", "status"]).output().map_err(|e| format!("gh not found: {}", e))?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn gh_repo_create(project_dir: String, name: String, private: bool, description: Option<String>) -> Result<serde_json::Value, String> {
+    let mut args = vec!["repo", "create", &name];
+    if private { args.push("--private"); } else { args.push("--public"); }
+    if let Some(ref d) = description { args.push("--description"); args.push(d); }
+    args.push("--source"); args.push(&project_dir); args.push("--remote"); args.push("origin"); args.push("--push");
+    let out = Command::new("gh").args(args).output().map_err(|e| format!("gh not found: {}", e))?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn gh_repo_create_remote(project_dir: String, name: String, private: bool) -> Result<serde_json::Value, String> {
+    let mut args = vec!["repo", "create", &name];
+    if private { args.push("--private"); } else { args.push("--public"); }
+    args.push("--source"); args.push(&project_dir); args.push("--remote"); args.push("origin");
+    let out = Command::new("gh").args(args).output().map_err(|e| format!("gh not found: {}", e))?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
 fn debug_start(project_dir: String) -> Result<serde_json::Value, String> {
     let mut cmd = Command::new("openocd");
     cmd.current_dir(&project_dir);
@@ -1209,6 +1296,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             git_status, git_diff, git_add, git_reset, git_commit, git_log, git_branches, git_init,
+            git_push, git_pull, git_remote_add, git_remote_list, git_checkout,
+            gh_auth_status, gh_repo_create, gh_repo_create_remote,
             debug_start, debug_stop,
             pio_library_search, pio_library_install, pio_boards_list,
             list_serial_ports,

@@ -1172,30 +1172,69 @@ export default function App() {
     const [status, setStatus] = useState<any>(null);
     const [log, setLog] = useState<any>(null);
     const [branches, setBranches] = useState<any>(null);
+    const [remotes, setRemotes] = useState<any>(null);
+    const [auth, setAuth] = useState<any>(null);
     const [msg, setMsg] = useState("");
+    const [repoName, setRepoName] = useState("");
+    const [privateRepo, setPrivateRepo] = useState(true);
+    const [remoteUrl, setRemoteUrl] = useState("");
+    const [remoteName, setRemoteName] = useState("origin");
+    const [branchName, setBranchName] = useState("");
     async function refresh() {
       if (!projectDir) return;
       try { const s = await invoke("git_status", {projectDir}); setStatus(s); } catch {}
       try { const l = await invoke("git_log", {projectDir, limit: 30}); setLog(l); } catch {}
       try { const b = await invoke("git_branches", {projectDir}); setBranches(b); } catch {}
+      try { const r = await invoke("git_remote_list", {projectDir}); setRemotes(r); } catch {}
+      try { const a = await invoke("gh_auth_status"); setAuth(a); } catch(e:any){ setAuth({error: e.toString()}); }
     }
     useEffect(() => { refresh(); }, [projectDir]);
     async function addAll() { if (!projectDir) return; try { await invoke("git_add", {projectDir, paths: ["."]}); await refresh(); } catch {} }
-    async function commit() { if (!projectDir || !msg.trim()) return; try { await invoke("git_commit", {projectDir, message: msg}); setMsg(""); await refresh(); /* log available via parent */ } catch {} }
+    async function commit() { if (!projectDir || !msg.trim()) return; try { await invoke("git_commit", {projectDir, message: msg}); setMsg(""); await refresh(); } catch {} }
     async function init() { if (!projectDir) return; try { await invoke("git_init", {projectDir}); await refresh(); } catch {} }
+    async function push() { if (!projectDir) return; try { const r:any = await invoke("git_push", {projectDir}); alert(r.output || r.error || JSON.stringify(r)); await refresh(); } catch(e:any){ alert(e.toString()); } }
+    async function pull() { if (!projectDir) return; try { const r:any = await invoke("git_pull", {projectDir}); alert(r.output || r.error || JSON.stringify(r)); await refresh(); } catch(e:any){ alert(e.toString()); } }
+    async function addRemote() { if (!projectDir || !remoteUrl.trim()) return; try { const r:any = await invoke("git_remote_add", {projectDir, name: remoteName, url: remoteUrl}); alert(r.output || r.error || JSON.stringify(r)); setRemoteUrl(""); await refresh(); } catch(e:any){ alert(e.toString()); } }
+    async function publishToGitHub() { if (!projectDir || !repoName.trim()) return; try { const r:any = await invoke("gh_repo_create", {projectDir, name: repoName, private: privateRepo}); alert(r.output || r.error || JSON.stringify(r)); await refresh(); } catch(e:any){ alert(e.toString()); } }
+    async function createRemoteOnly() { if (!projectDir || !repoName.trim()) return; try { const r:any = await invoke("gh_repo_create_remote", {projectDir, name: repoName, private: privateRepo}); alert(r.output || r.error || JSON.stringify(r)); await refresh(); } catch(e:any){ alert(e.toString()); } }
+    async function checkout() { if (!projectDir || !branchName.trim()) return; try { const r:any = await invoke("git_checkout", {projectDir, branch: branchName, create: false}); alert(r.output || r.error || JSON.stringify(r)); setBranchName(""); await refresh(); } catch(e:any){ alert(e.toString()); } }
     return (
       <div style={{padding:8, fontSize:12, overflow:"auto", height:"100%"}}>
         <div style={{display:"flex", gap:4, marginBottom:8, flexWrap:"wrap"}}>
           <button onClick={refresh}>Refresh</button>
           <button onClick={addAll}>Stage All</button>
           <button onClick={init}>Init</button>
+          <button onClick={push}>Push</button>
+          <button onClick={pull}>Pull</button>
         </div>
+        <div style={{color:"var(--text-hi)", marginBottom:4}}>Commit</div>
         <input value={msg} onChange={e=>setMsg(e.target.value)} placeholder="Commit message" style={{width:"100%", marginBottom:4}} />
         <button onClick={commit} disabled={!msg.trim()}>Commit</button>
+        <div style={{marginTop:12, color:"var(--text-hi)"}}>GitHub</div>
+        <div style={{fontSize:11, color:"var(--muted)", marginBottom:4}}>{auth?.output || auth?.error || "Checking auth..."}</div>
+        <div style={{display:"flex", gap:4, marginBottom:4}}>
+          <input value={repoName} onChange={e=>setRepoName(e.target.value)} placeholder="Repository name" style={{flex:1}} />
+          <label style={{display:"flex", alignItems:"center", gap:2}}><input type="checkbox" checked={privateRepo} onChange={e=>setPrivateRepo(e.target.checked)} />Private</label>
+        </div>
+        <div style={{display:"flex", gap:4, flexWrap:"wrap"}}>
+          <button onClick={publishToGitHub}>Publish to GitHub (create + push)</button>
+          <button onClick={createRemoteOnly}>Create repo + add remote</button>
+        </div>
+        <div style={{marginTop:12, color:"var(--text-hi)"}}>Remotes</div>
+        <pre style={{whiteSpace:"pre-wrap", fontSize:11}}>{remotes?.output || remotes?.error || "—"}</pre>
+        <div style={{display:"flex", gap:4, marginBottom:4}}>
+          <input value={remoteName} onChange={e=>setRemoteName(e.target.value)} placeholder="origin" style={{width:80}} />
+          <input value={remoteUrl} onChange={e=>setRemoteUrl(e.target.value)} placeholder="https://github.com/user/repo.git" style={{flex:1}} />
+          <button onClick={addRemote}>Add Remote</button>
+        </div>
+        <div style={{marginTop:12, color:"var(--text-hi)"}}>Branches</div>
+        <div style={{display:"flex", gap:4, marginBottom:4}}>
+          <input value={branchName} onChange={e=>setBranchName(e.target.value)} placeholder="branch name" style={{flex:1}} />
+          <button onClick={checkout}>Checkout</button>
+        </div>
+        <pre style={{whiteSpace:"pre-wrap", fontSize:11}}>{branches?.output || branches?.error || "—"}</pre>
         <div style={{marginTop:12, color:"var(--text-hi)"}}>Status</div>
         <pre style={{whiteSpace:"pre-wrap", fontSize:11}}>{status?.output || status?.error || "—"}</pre>
-        <div style={{marginTop:12, color:"var(--text-hi)"}}>Branches</div>
-        <pre style={{whiteSpace:"pre-wrap", fontSize:11}}>{branches?.output || branches?.error || "—"}</pre>
         <div style={{marginTop:12, color:"var(--text-hi)"}}>Log</div>
         <pre style={{whiteSpace:"pre-wrap", fontSize:11}}>{log?.output || log?.error || "—"}</pre>
       </div>
