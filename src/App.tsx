@@ -1174,6 +1174,7 @@ export default function App() {
     const [branches, setBranches] = useState<any>(null);
     const [remotes, setRemotes] = useState<any>(null);
     const [auth, setAuth] = useState<any>(null);
+    const authChecked = useRef(false);
     const [msg, setMsg] = useState("");
     const [repoName, setRepoName] = useState("");
     const [privateRepo, setPrivateRepo] = useState(true);
@@ -1186,9 +1187,12 @@ export default function App() {
       try { const l = await invoke("git_log", {projectDir, limit: 30}); setLog(l); } catch {}
       try { const b = await invoke("git_branches", {projectDir}); setBranches(b); } catch {}
       try { const r = await invoke("git_remote_list", {projectDir}); setRemotes(r); } catch {}
-      try { const a = await invoke("gh_auth_status"); setAuth(a); } catch(e:any){ setAuth({error: e.toString()}); }
+      if (!authChecked.current) {
+        authChecked.current = true;
+        try { const a = await invoke("gh_auth_status"); setAuth(a); } catch(e:any){ setAuth({error: e.toString()}); }
+      }
     }
-    useEffect(() => { refresh(); }, [projectDir]);
+    useEffect(() => { authChecked.current = false; refresh(); }, [projectDir]);
     async function addAll() { if (!projectDir) return; try { await invoke("git_add", {projectDir, paths: ["."]}); await refresh(); } catch {} }
     async function commit() { if (!projectDir || !msg.trim()) return; try { await invoke("git_commit", {projectDir, message: msg}); setMsg(""); await refresh(); } catch {} }
     async function init() { if (!projectDir) return; try { await invoke("git_init", {projectDir}); await refresh(); } catch {} }
