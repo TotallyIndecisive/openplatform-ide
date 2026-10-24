@@ -135,7 +135,7 @@ export default function App() {
   const [activePath, setActivePath] = useState<string>("");
   const [treeRoot, setTreeRoot] = useState<FileNode[]>([]);
   const [expanded, setExpanded] = useState<Record<string, FileNode[]>>({});
-  const [panel, setPanel] = useState<"files" | "outline" | "serial" | "problems">("files");
+  const [panel, setPanel] = useState<"files" | "outline" | "serial" | "problems" | "git" | "debug" | "libraries" | "boards">("files");
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelWidth, setPanelWidth] = useState(240);
   const [outline, setOutline] = useState<Symbol[]>([]);
@@ -1168,6 +1168,98 @@ export default function App() {
 
   // ============================================================== render tree ===
 
+  function GitPanel({projectDir}: {projectDir: string}) {
+    const [status, setStatus] = useState<any>(null);
+    const [log, setLog] = useState<any>(null);
+    const [branches, setBranches] = useState<any>(null);
+    const [msg, setMsg] = useState("");
+    async function refresh() {
+      if (!projectDir) return;
+      try { const s = await invoke("git_status", {projectDir}); setStatus(s); } catch {}
+      try { const l = await invoke("git_log", {projectDir, limit: 30}); setLog(l); } catch {}
+      try { const b = await invoke("git_branches", {projectDir}); setBranches(b); } catch {}
+    }
+    useEffect(() => { refresh(); }, [projectDir]);
+    async function addAll() { if (!projectDir) return; try { await invoke("git_add", {projectDir, paths: ["."]}); await refresh(); } catch {} }
+    async function commit() { if (!projectDir || !msg.trim()) return; try { await invoke("git_commit", {projectDir, message: msg}); setMsg(""); await refresh(); /* log available via parent */ } catch {} }
+    async function init() { if (!projectDir) return; try { await invoke("git_init", {projectDir}); await refresh(); } catch {} }
+    return (
+      <div style={{padding:8, fontSize:12, overflow:"auto", height:"100%"}}>
+        <div style={{display:"flex", gap:4, marginBottom:8, flexWrap:"wrap"}}>
+          <button onClick={refresh}>Refresh</button>
+          <button onClick={addAll}>Stage All</button>
+          <button onClick={init}>Init</button>
+        </div>
+        <input value={msg} onChange={e=>setMsg(e.target.value)} placeholder="Commit message" style={{width:"100%", marginBottom:4}} />
+        <button onClick={commit} disabled={!msg.trim()}>Commit</button>
+        <div style={{marginTop:12, color:"var(--text-hi)"}}>Status</div>
+        <pre style={{whiteSpace:"pre-wrap", fontSize:11}}>{status?.output || status?.error || "—"}</pre>
+        <div style={{marginTop:12, color:"var(--text-hi)"}}>Branches</div>
+        <pre style={{whiteSpace:"pre-wrap", fontSize:11}}>{branches?.output || branches?.error || "—"}</pre>
+        <div style={{marginTop:12, color:"var(--text-hi)"}}>Log</div>
+        <pre style={{whiteSpace:"pre-wrap", fontSize:11}}>{log?.output || log?.error || "—"}</pre>
+      </div>
+    );
+  }
+
+  function DebugPanel({projectDir}: {projectDir: string}) {
+    const [state, setState] = useState<any>(null);
+    async function start() {
+      if (!projectDir) return;
+      try { const r = await invoke("debug_start", {projectDir}); setState(r); } catch(e:any){ setState({error: e.toString()}); }
+    }
+    async function stop() {
+      try { const r = await invoke("debug_stop"); setState(r); } catch(e:any){ setState({error: e.toString()}); }
+    }
+    return (
+      <div style={{padding:8, fontSize:12, overflow:"auto", height:"100%"}}>
+        <div style={{display:"flex", gap:4, marginBottom:8}}>
+          <button onClick={start}>Start (OpenOCD)</button>
+          <button onClick={stop}>Stop</button>
+        </div>
+        <div style={{color:"var(--muted)", fontSize:11}}>ESP32 debugging requires a JTAG probe. Starts OpenOCD with a basic config.</div>
+        <pre style={{whiteSpace:"pre-wrap", fontSize:11, marginTop:8}}>{state ? JSON.stringify(state, null, 2) : "—"}</pre>
+      </div>
+    );
+  }
+
+  function LibrariesPanel({projectDir}: {projectDir: string}) {
+    const [q, setQ] = useState("");
+    const [res, setRes] = useState<any>(null);
+    async function search() {
+      try { const r = await invoke("pio_library_search", {query: q}); setRes(r); } catch(e:any){ setRes({error: e.toString()}); }
+    }
+    async function install(lib: string) {
+      if (!projectDir) return;
+      try { const r = await invoke("pio_library_install", {projectDir, lib}); setRes(r); } catch(e:any){ setRes({error: e.toString()}); }
+    }
+    return (
+      <div style={{padding:8, fontSize:12, overflow:"auto", height:"100%"}}>
+        <div style={{display:"flex", gap:4, marginBottom:8}}>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search libraries..." style={{flex:1}} />
+          <button onClick={search}>Search</button>
+        </div>
+        <div style={{color:"var(--muted)", fontSize:11, marginBottom:4}}>Search results (JSON from PlatformIO)</div>
+        <pre style={{whiteSpace:"pre-wrap", fontSize:10, maxHeight:200, overflow:"auto"}}>{res?.output || res?.error || "—"}</pre>
+        <input placeholder="Library name to install" style={{width:"100%", marginTop:8}} onKeyDown={e=>{ if(e.key==="Enter"){ const v=(e.target as HTMLInputElement).value; if(v){ install(v); (e.target as HTMLInputElement).value=""; }}}} />
+      </div>
+    );
+  }
+
+  function BoardsPanel() {
+    const [res, setRes] = useState<any>(null);
+    async function list() {
+      try { const r = await invoke("pio_boards_list"); setRes(r); } catch(e:any){ setRes({error: e.toString()}); }
+    }
+    useEffect(() => { list(); }, []);
+    return (
+      <div style={{padding:8, fontSize:12, overflow:"auto", height:"100%"}}>
+        <button onClick={list}>Refresh</button>
+        <pre style={{whiteSpace:"pre-wrap", fontSize:10, marginTop:8}}>{res?.output || res?.error || "—"}</pre>
+      </div>
+    );
+  }
+
   function renderNodes(nodes: FileNode[], depth: number) {
     return nodes.map((n) => {
       const kids = expanded[n.path];
@@ -1195,7 +1287,7 @@ export default function App() {
   }
 
   const panelTitle =
-    panel === "files" ? "Project" : panel === "outline" ? "Outline" : panel === "problems" ? "Problems" : "Serial";
+    panel === "files" ? "Project" : panel === "outline" ? "Outline" : panel === "problems" ? "Problems" : panel === "serial" ? "Serial" : panel === "git" ? "Git" : panel === "debug" ? "Debug" : panel === "libraries" ? "Libraries" : "Boards";
 
   return (
     <div className="wrap" onMouseMove={(e) => e.stopPropagation()}>
@@ -1349,6 +1441,10 @@ export default function App() {
             ⌁
           </button>
           <button title={`Problems (${diagnostics.length})`} onClick={() => { setPanel("problems"); setPanelOpen(true); }}>!</button>
+          <button className={panelOpen && panel === "git" ? "active" : ""} title="Git" onClick={() => { setPanel("git"); setPanelOpen(true); }}>⎇</button>
+          <button className={panelOpen && panel === "debug" ? "active" : ""} title="Debug" onClick={() => { setPanel("debug"); setPanelOpen(true); }}>🐞</button>
+          <button className={panelOpen && panel === "libraries" ? "active" : ""} title="Libraries" onClick={() => { setPanel("libraries"); setPanelOpen(true); }}>📚</button>
+          <button className={panelOpen && panel === "boards" ? "active" : ""} title="Boards" onClick={() => { setPanel("boards"); setPanelOpen(true); }}>▦</button>
           <span className="rail-spacer" />
           <button
             className={outOpen ? "active" : ""}
@@ -1413,6 +1509,10 @@ export default function App() {
                     <span className="kind">{d.severity}</span><span className="nm">{baseName(d.path)}:{d.line} — {d.message}</span>
                   </div>
                 )) : <div className="tree-empty">No compiler diagnostics. Verify to check the project.</div>)}
+                {panel === "git" && <GitPanel projectDir={projectDir} />}
+                {panel === "debug" && <DebugPanel projectDir={projectDir} />}
+                {panel === "libraries" && <LibrariesPanel projectDir={projectDir} />}
+                {panel === "boards" && <BoardsPanel />}
                 {panel === "serial" && (
                   <div className="serial-panel">
                     <div className="serial-tools">

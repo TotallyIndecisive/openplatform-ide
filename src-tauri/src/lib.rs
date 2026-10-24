@@ -599,6 +599,123 @@ const TREE_IGNORES: &[&str] = &[
 /// List one directory level. The panel is virtualized and loads per-directory,
 /// so huge projects (`.pio`, `node_modules`) never block the UI thread.
 #[tauri::command]
+fn git_status(project_dir: String) -> Result<serde_json::Value, String> {
+    let out = Command::new("git").args(["-C", &project_dir, "status", "--porcelain=v1", "-b"]).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn git_diff(project_dir: String, path: Option<String>) -> Result<serde_json::Value, String> {
+    let mut args = vec!["-C".to_string(), project_dir.clone(), "diff".to_string()];
+    if let Some(ref p) = path { args.push("--".to_string()); args.push(p.clone()); }
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let out = Command::new("git").args(args_ref).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn git_add(project_dir: String, paths: Vec<String>) -> Result<serde_json::Value, String> {
+    let mut args = vec!["-C".to_string(), project_dir.clone(), "add".to_string()];
+    for p in paths { args.push(p); }
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let out = Command::new("git").args(args_ref).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn git_reset(project_dir: String, paths: Vec<String>) -> Result<serde_json::Value, String> {
+    let mut args = vec!["-C".to_string(), project_dir.clone(), "reset".to_string()];
+    for p in paths { args.push(p); }
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let out = Command::new("git").args(args_ref).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn git_commit(project_dir: String, message: String) -> Result<serde_json::Value, String> {
+    let out = Command::new("git").args(["-C", &project_dir, "commit", "-m", &message]).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn git_log(project_dir: String, limit: Option<u32>) -> Result<serde_json::Value, String> {
+    let n = limit.unwrap_or(50).to_string();
+    let out = Command::new("git").args(["-C", &project_dir, "log", "--oneline", "-n", &n]).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn git_branches(project_dir: String) -> Result<serde_json::Value, String> {
+    let out = Command::new("git").args(["-C", &project_dir, "branch", "-a"]).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn git_init(project_dir: String) -> Result<serde_json::Value, String> {
+    let out = Command::new("git").args(["-C", &project_dir, "init"]).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn debug_start(project_dir: String) -> Result<serde_json::Value, String> {
+    let mut cmd = Command::new("openocd");
+    cmd.current_dir(&project_dir);
+    cmd.args(["-f", "interface/ftdi/esp32_devkitj_v1.cfg", "-f", "target/esp32.cfg"]);
+    let child = cmd.spawn();
+    match child {
+        Ok(_) => Ok(serde_json::json!({"success": true, "message": "OpenOCD started (basic config)"})),
+        Err(e) => Ok(serde_json::json!({"success": false, "error": format!("Failed to start openocd: {}", e)}))
+    }
+}
+
+#[tauri::command]
+fn debug_stop() -> Result<serde_json::Value, String> {
+    let _ = Command::new("pkill").args(["-f", "openocd"]).output();
+    let _ = Command::new("pkill").args(["-f", "gdb"]).output();
+    Ok(serde_json::json!({"success": true}))
+}
+
+#[tauri::command]
+fn pio_library_search(query: String) -> Result<serde_json::Value, String> {
+    let out = Command::new("pio").args(["lib", "search", &query, "--json-output"]).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn pio_library_install(project_dir: String, lib: String) -> Result<serde_json::Value, String> {
+    let out = Command::new("pio").args(["lib", "-d", &project_dir, "install", &lib]).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
+fn pio_boards_list() -> Result<serde_json::Value, String> {
+    let out = Command::new("pio").args(["boards", "--json-output"]).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok(serde_json::json!({"success": out.status.success(), "output": text, "error": err}))
+}
+
+#[tauri::command]
 fn list_dir(path: String) -> Result<Vec<FileNode>, String> {
     let mut out: Vec<FileNode> = Vec::new();
     let entries = std::fs::read_dir(&path).map_err(|e| format!("read dir: {e}"))?;
@@ -1091,6 +1208,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            git_status, git_diff, git_add, git_reset, git_commit, git_log, git_branches, git_init,
+            debug_start, debug_stop,
+            pio_library_search, pio_library_install, pio_boards_list,
             list_serial_ports,
             identify_chip,
             tasks::cli_start,
