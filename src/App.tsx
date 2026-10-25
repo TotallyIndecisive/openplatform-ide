@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { installNativeMenu } from "./nativeMenu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { connectLanguage } from "./language";
 import { parseDiagnostic, type BuildDiagnostic } from "./diagnostics";
@@ -112,7 +113,6 @@ export default function App() {
   const [status, setStatus] = useState("");
   const [projectDir, setProjectDir] = useState("");
   const [recents, setRecents] = useState<string[]>([]);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [serialOpen, setSerialOpen] = useState(false);
   const [serialText, setSerialText] = useState("");
   const [baud, setBaud] = useState(115200);
@@ -733,7 +733,6 @@ export default function App() {
 
   /** File ▸ New Project — pick a folder, scaffold a PlatformIO project there. */
   async function newProject(template: "esp32" | "uno" | "nano" = "esp32") {
-    setMenuOpen(false);
     const dest = await saveDialog({
       title: "Create new PlatformIO project",
       defaultPath: "MyProject",
@@ -755,7 +754,6 @@ export default function App() {
 
   /** File ▸ Open Project — browse to a folder (or its platformio.ini). */
   async function openProject() {
-    setMenuOpen(false);
     const picked = await openDialog({
       title: "Open PlatformIO project",
       directory: true,
@@ -783,7 +781,6 @@ export default function App() {
 
   /** Save As — write the active buffer (or the whole project) elsewhere. */
   async function saveAs() {
-    setMenuOpen(false);
     if (active) {
       const dest = await pickFolder("Save file as", baseName(active.path));
       if (!dest) return;
@@ -813,7 +810,6 @@ export default function App() {
 
   /** New File — create an empty file inside the project, then open it. */
   async function newFile() {
-    setMenuOpen(false);
     if (!projectDir) return;
     const dest = await saveDialog({
       title: "Create new file in project",
@@ -1022,10 +1018,32 @@ export default function App() {
     if (overlay) setTimeout(() => overlayInputRef.current?.focus(), 0);
   }, [overlay]);
 
+  // Native macOS menu actions resolve against current editor/project state.
+  const nativeActions = useRef<Record<string, () => void>>({});
+  nativeActions.current = {
+    ...actionsRef.current,
+    "Go to File": openFinder,
+    "Find in Project": openSearch,
+    "Command Palette": openPalette,
+    "Close Tab": () => { if (activeRef.current) void closeBuffer(activeRef.current); },
+    ...Object.fromEntries(recents.map(path => [`recent:${path}`, () => { void openProjectDir(path); }])),
+  };
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    let dispose: (() => Promise<void>) | undefined;
+    void installNativeMenu(recents, action => nativeActions.current[action]?.(), () => cancelled)
+      .then(cleanup => { dispose = cleanup; if (cancelled) void cleanup(); })
+      .catch(error => log(`Application menu: ${error}`));
+    return () => { cancelled = true; void dispose?.(); };
+  }, [recents, log]);
+
   // -- global keybindings, matching Zed's defaults --
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const mod = e.metaKey || e.ctrlKey;
+      // The native menu owns these accelerators on macOS.
+      if (isTauri() && /Mac/.test(navigator.platform) && mod && ["p", "f", "s", "w", "b", "o", "n"].includes(e.key.toLowerCase())) return;
       if (mod && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         openPalette();
@@ -1337,72 +1355,6 @@ export default function App() {
     <div className="wrap" onMouseMove={(e) => e.stopPropagation()}>
       {/* ------------------------------------------------------------ title bar */}
       <div className="titlebar">
-        <div className="menu">
-          <button className="menu-btn" onClick={() => setMenuOpen(!menuOpen)}>
-            File ▾
-          </button>
-          {menuOpen && (
-            <>
-              <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />
-              <div className="menu-drop">
-                <button onClick={() => newProject()}>
-                  New Project…<span className="accel">⇧⌘N</span>
-                </button>
-                <button onClick={openProject}>
-                  Open Project…<span className="accel">⌘O</span>
-                </button>
-                <button onClick={newFile}>
-                  New File…<span className="accel">⌘N</span>
-                </button>
-                <div className="menu-sep" />
-                <button
-                  onClick={() => {
-                    setMenuOpen(false);
-                    saveActive();
-                  }}
-                >
-                  Save<span className="accel">⌘S</span>
-                </button>
-                <button onClick={() => { setMenuOpen(false); saveAll(); }}>
-                  Save All<span className="accel">⌥⌘S</span>
-                </button>
-                <button onClick={saveAs}>
-                  Save As…<span className="accel">⇧⌘S</span>
-                </button>
-                <div className="menu-sep" />
-                <button onClick={() => { setMenuOpen(false); openPalette(); }}>
-                  Command Palette…<span className="accel">⇧⌘P</span>
-                </button>
-                <button onClick={() => { setMenuOpen(false); openFinder(); }}>
-                  Go to File…<span className="accel">⌘P</span>
-                </button>
-                <button onClick={() => { setMenuOpen(false); openSearch(); }}>
-                  Find in Project…<span className="accel">⇧⌘F</span>
-                </button>
-                {recents.length > 0 && (
-                  <>
-                    <div className="menu-sep" />
-                    <div className="menu-label">Recent projects</div>
-                    {recents.map((r) => (
-                      <button
-                        key={r}
-                        className="menu-recent"
-                        title={r}
-                        onClick={() => {
-                          setMenuOpen(false);
-                          openProjectDir(r);
-                        }}
-                      >
-                        {r.split("/").pop()}
-                      </button>
-                    ))}
-                  </>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-
         <span className="brand">openplatform-ide</span>
         <span className="sub">{projectDir ? baseName(projectDir) : "no project"}</span>
 
