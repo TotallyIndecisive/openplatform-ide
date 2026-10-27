@@ -1,55 +1,109 @@
 # OpenPlatform
 
-A focused macOS workspace for Arduino and ESP32 development. Built with Tauri, React, Monaco and PlatformIO.
+OpenPlatform is a focused macOS IDE for developing Arduino and ESP32 projects with [PlatformIO](https://platformio.org/). It brings code editing, board tools, a terminal, serial output and GitHub source control into one compact workspace, so you can write firmware, build it, upload it to a board and manage its history without leaving the IDE.
 
 ![OpenPlatform v1 workspace](docs/images/workspace-v1.jpg)
 
-**Documentation updated: 27 October 2026.** This describes the current workspace, including the source-control and Accounts changes made after the `v1.0.0` checkpoint. Those changes are recorded as unreleased until a new version is published.
+The project is in active development. The `v1.0.0` tag captures the first workspace design; the source-control and account improvements described below were added afterwards and are currently unreleased. This guide describes the current `main` branch as of 27 October 2026.
 
-## Latest changes — 27 October 2026
+## The workspace
 
-- Expanded source control with repository initialization, working and staged file lists, individual and bulk staging/unstaging, diff previews, commits, branch creation and switching, and commit history.
-- Added GitHub CLI sign-in and account switching, private or public repository publishing, and controls for connecting an existing `origin`, fetching, pulling and pushing. Pulls fast-forward only; a divergent history is reported instead of being merged automatically.
-- Moved Git author and GitHub account details to **Settings → Accounts**. Fields are locked until **Edit** is selected. The author preference is stored locally for commits made in OpenPlatform; Git's existing author configuration is used when no preference is saved.
-- Added a last-sign-in indicator that advances after each elapsed 24-hour period. It records successful sign-ins performed through the updated IDE; earlier or external sign-ins show **Not recorded**. GitHub CLI manages authentication credentials; the IDE does not display or store access tokens in Settings.
-- Checked the source-control interface with disposable local repositories and a controlled GitHub CLI fixture, and verified repository creation, push, fetch and pull against a new private GitHub test repository. See [GitHub and source control](docs/github-source-control.md) for the workflow and validation limits.
+The editor is at the centre of the app, with open documents above it and a terminal beside a separate output window below. A compact floating dock gives access to project tools; its small icons show labels on hover or focus, and you can choose which tools are visible in Settings. Standard File, Edit, View, Build, Tools and Window menus live in the macOS menu bar.
 
-## Version 1 workspace
+The workspace includes a file explorer, outline, syntax highlighting, breadcrumbs, minimap, preview tabs and locally remembered appearance preferences. Unsaved-file recovery and checks for external file changes help protect editing work.
 
-- A light, compact editor with teal accents, centered open-file tabs, a minimap, breadcrumbs and syntax highlighting.
-- A short floating dock with small icons and hover/focus labels. Choose visible tools in Settings; the dock grows or shrinks to fit.
-- A persistent terminal beside a separate window for Serial Output, Build Output and Problems. Both windows can stay open together.
-- Native macOS menus for File, Edit, View, Build, Tools and Window. File actions are in the system menu bar rather than inside the workspace.
-- Consistent floating panels for projects, files, outline, GitHub, libraries, boards, basic OpenOCD controls and appearance settings.
+## What you can do
 
-## Development tools
+- **Create and edit projects:** create, open and revisit PlatformIO projects, including ESP32, Arduino Uno and classic Nano templates. Work with multiple open files, save individual files or all files, and find files or text across a project.
+- **Navigate C/C++ code:** use clangd-powered completion, hover information, definitions, references, formatting and diagnostics. Generate a compilation database to give clangd the project's build settings.
+- **Build and upload:** choose a PlatformIO environment and serial port, identify a connected chip, verify or upload firmware, and cancel a running task. Build, clean, run tests, run static analysis, install dependencies and generate the compilation database from the IDE. Build messages and diagnostics appear in Output and Problems.
+- **Work with a board:** inspect and send serial data, choose the baud rate and line ending, and release the serial monitor around uploads. Search the board catalogue and configure the project in `platformio.ini`.
+- **Use libraries:** search for and install PlatformIO libraries for the project.
+- **Use Git and GitHub:** initialize a repository, inspect changes and diffs, stage or unstage files, commit, create or switch branches, view history, fetch, pull and push. Connect an existing remote or publish a new public or private GitHub repository.
+- **Use a terminal:** run shell commands in a real, persistent terminal alongside the output window.
+- **Start basic hardware debugging:** use the OpenOCD controls with a suitable installation and JTAG probe. This is basic process control, not a complete graphical debugger.
 
-- New, open and recent projects; ESP32, Arduino Uno and Nano templates; native Save / Save As dialogs.
-- Monaco C/C++ editing with clangd completion, hover, definitions, references, formatting and live diagnostics.
-- Project search, file finder, command palette, preview tabs and unsaved-file recovery.
-- Explicit PlatformIO build environment and USB serial port selection; identify, verify, upload and cancel controls.
-- Real PTY terminal with persistent scrollback and shell restart.
-- Serial receive/send, baud selection, None/LF/CRLF endings and automatic monitor release/resume around uploads.
-- Compiler diagnostics in the Problems view. Build, clean, test, analysis, dependency installation and compilation database commands.
-- Git status, individual and bulk staging/unstaging, diff previews, commits, branch creation/switching, recent history, fetch, fast-forward pull, push and GitHub publishing.
-- PlatformIO library search/install and searchable board catalogue. Configure the selected board in `platformio.ini`.
+PlatformIO supplies the board platforms, frameworks, compilers and libraries for a project. A project's `platformio.ini` is the source of truth for its environments and board configuration. Hardware support and debugging depend on the board, platform configuration and connected equipment.
 
-## Run locally
+## Set up on macOS
 
-Requires Node.js/npm, Rust, Git, PlatformIO Core and clangd. GitHub sign-in, account switching and publishing use the GitHub CLI (`gh`); basic hardware debugging uses OpenOCD and a compatible JTAG probe.
+These instructions build and run the current source. You need an internet connection for the initial tool and PlatformIO package downloads.
+
+### 1. Install the prerequisites
+
+Install Apple's command-line developer tools:
 
 ```sh
-npm install
+xcode-select --install
+```
+
+Install [Homebrew](https://brew.sh/) if you do not already have it. In Terminal, install Node.js, Git and PlatformIO Core:
+
+```sh
+brew install node git platformio
+```
+
+Use Node.js 22.12 or later and the npm that comes with it. Install the stable Rust toolchain using the instructions at [rustup.rs](https://rustup.rs/), then restart Terminal or load the environment as directed by the installer. [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/) describe the macOS build requirements in more detail.
+
+For C/C++ code intelligence, install LLVM/clangd. GitHub CLI is needed for GitHub sign-in, account switching and publishing:
+
+```sh
+brew install llvm gh
+```
+
+Make clangd available to the shell that launches OpenPlatform:
+
+```sh
+export PATH="$(brew --prefix llvm)/bin:$PATH"
+```
+
+Add that line to your shell configuration if you want it on future Terminal sessions. A compatible [OpenOCD](https://openocd.org/) installation and JTAG probe are optional and only needed for the basic hardware debugging controls.
+
+### 2. Download and run the IDE
+
+```sh
+git clone https://github.com/TotallyIndecisive/openplatform-ide.git
+cd openplatform-ide
+npm ci
 npm run tauri dev
 ```
 
-Build the macOS application:
+The first build can take a while while Rust and JavaScript dependencies are compiled. Keep the Terminal session open while using the development app.
+
+### 3. Build a local application
+
+To build a macOS app bundle for local development:
 
 ```sh
 npm run tauri -- build --debug --bundles app
 ```
 
-The local app is written to `src-tauri/target/debug/bundle/macos/OpenPlatform.app`. This is a development build, not a signed/notarized installer.
+The bundle is created at `src-tauri/target/debug/bundle/macos/OpenPlatform.app`. It is a local debug build, not a signed or notarized installer. The project does not currently describe a packaged end-user installation in this guide.
+
+## Start a project
+
+1. Use **File → New Project** to create a project from a board template, or **File → Open Project** to open an existing PlatformIO project. Recent projects are available in the app.
+2. Select the PlatformIO environment for your board. Check `platformio.ini` for the board, framework and any library dependencies.
+3. Open the source file from the project explorer and edit it in the central editor. Run **Build → Generate Compilation Database** after opening a project and again when its environment, build flags or dependencies change so clangd can provide accurate C/C++ navigation.
+4. Connect your board, refresh and select its serial port, then verify or upload the project. The first PlatformIO build may download the platform and toolchain. Use the output and Problems views to inspect errors.
+5. Open Serial Output to monitor messages or send text. Select the baud rate used by your firmware; the monitor can be released and resumed around an upload.
+
+Running embedded tests can upload test firmware to a connected board. Check your PlatformIO test configuration before running them.
+
+## Git and GitHub
+
+Git is available for local repository work; GitHub features additionally require GitHub CLI (`gh`) and an authenticated account.
+
+1. Open **Settings → Accounts**, choose **Edit**, and save the Git author name and email you want OpenPlatform to use for commits. If no author preference is saved, Git's existing configuration is used.
+2. Use **Sign in to GitHub** and complete the GitHub CLI authorization flow in your browser. You can sign in another account and switch between accounts already authenticated in GitHub CLI.
+3. Open the GitHub tool from the dock. Initialize the repository if needed, inspect the changed files and their diffs, stage the changes you want, enter a commit message and commit.
+4. Publish a new public or private repository, or connect an existing `origin`. Use Fetch, Pull and Push to synchronize subsequent work.
+
+Pull uses fast-forward only. If local and remote histories have diverged, resolve the history using Git before trying again. If the project is inside a parent Git repository, staging applies to the whole repository; the panel shows the repository root.
+
+Accounts fields are locked until **Edit** is selected. The Git author preference is local to OpenPlatform; changing the GitHub username switches to an account already authenticated in GitHub CLI and does not edit the profile on GitHub. The last-sign-in indicator records successful sign-ins performed through the updated IDE and advances after each elapsed 24-hour period. Earlier or external sign-ins show **Not recorded**. GitHub CLI manages authentication credentials; OpenPlatform does not display or store access tokens in Settings.
+
+See the [GitHub and source-control guide](docs/github-source-control.md) for more detail on the workflow, credentials and validation.
 
 ## Keyboard shortcuts
 
@@ -65,36 +119,45 @@ The local app is written to `src-tauri/target/debug/bundle/macos/OpenPlatform.ap
 | ⌘B | Toggle auxiliary panel |
 | ⌃` | Toggle terminal |
 | ⌘, | Settings |
+| F12 | Go to definition in C/C++ |
 
-For C++ navigation, run **Build → Generate Compilation Database** after opening a new project or changing its environment. F12 goes to a definition. Appearance settings and dock visibility are remembered locally.
+## Troubleshooting and configuration
 
-Tool executable overrides are `OPENPLATFORM_PIO`, `OPENPLATFORM_CLANGD`, `OPENPLATFORM_CODE` and `GH_PATH`. `OPENPLATFORM_PROJECT` selects the initial project; otherwise the most recent existing project opens.
+- **PlatformIO or clangd is not found:** check `which pio` and `which clangd` in the Terminal used to launch the app. If installed in a nonstandard location, start the development app with `OPENPLATFORM_PIO` or `OPENPLATFORM_CLANGD` set to the executable's absolute path. Regenerate the compilation database if C/C++ navigation is incomplete.
+- **A board or port is missing:** reconnect the board, check the USB cable and refresh the port list. Make sure the chosen environment matches the board and that another application is not using the serial port.
+- **GitHub sign-in or publishing fails:** check that `gh` is installed and available, and complete its browser authorization. Check the selected account and repository permissions. `GH_PATH` can point to a nonstandard GitHub CLI executable.
+- **Pull reports divergent history:** OpenPlatform intentionally uses fast-forward-only pulls. Resolve the divergence with Git, then retry.
 
-## GitHub setup
+Other supported executable overrides are `OPENPLATFORM_CODE` and `GH_PATH`. `OPENPLATFORM_PROJECT` selects the initial project; otherwise the most recent existing project opens. Environment variables must be available to the process launching the app; Finder-launched apps may not inherit your Terminal's shell configuration.
 
-1. Open **Settings → Accounts**, select **Edit**, and save a Git author name and email. To connect GitHub, select **Sign in to GitHub** and complete the GitHub CLI browser authorization.
-2. Open the GitHub icon in the dock. Initialize the repository if needed, review and stage files, enter a commit message, and commit.
-3. Publish a new private or public repository, or connect an existing `origin`. Use Fetch, Pull and Push for subsequent updates. If the project sits inside a parent Git repository, staging controls apply to that entire repository; the panel displays its root.
+## Project history
 
-Changing the GitHub username in Accounts switches to an account already authenticated in GitHub CLI; it does not edit the profile hosted by GitHub. **Sign in another account** starts another device flow. [The source-control guide](docs/github-source-control.md) covers credential handling, limitations and troubleshooting context.
+The dates below summarize the project from its first recorded Git commit through the current changes. For individual changes and the earlier development notes, see the [changelog](CHANGELOG.md).
 
-## Source-control checks — 27 October 2026
+| Date | Milestone |
+| --- | --- |
+| 17 October 2026 | Initial OpenPlatform IDE prototype and core application foundation. |
+| 18 October 2026 | PlatformIO project creation and opening, project files and recent-project workflows. |
+| 19 October 2026 | A more integrated workspace with file navigation, command palette, project search, terminal and output. |
+| 24 October 2026 | Development-tool and reliability work across clangd, safe file handling, build environments, serial and task controls, plus Git, library, board and basic OpenOCD panels. |
+| 25 October 2026 | Native macOS application menus and continued workspace refinement. |
+| 27 October 2026 | `v1.0.0` workspace checkpoint: centred editor and document tabs, compact configurable floating dock, and terminal and output side by side. Subsequent unreleased changes expanded Git/GitHub workflows and added the locked Accounts settings and sign-in age indicator. |
 
-The frontend and macOS debug app builds passed. Disposable local Git tests covered staged and unstaged changes, commits, branches, push/fetch/pull and divergent-pull handling. A CLI fixture covered account-status, account-switch and repository-publish command handling, while a live private GitHub test covered repository creation, push, fetch and pull. Account locking and the Git workflow were also checked in a separate native QA build.
+## Development and validation
 
-The revised last-sign-in recording and switching between two real GitHub accounts have not yet been tested end to end. The private GitHub test repository was left in place because the current CLI permissions did not report repository-deletion access.
-
-To run the focused local checks (Node 22.6 or later):
+OpenPlatform uses Tauri and Rust for the desktop backend, React and TypeScript for the interface, Monaco for editing, xterm for the terminal, and PlatformIO for embedded workflows.
 
 ```sh
-node --experimental-strip-types --test scripts/accountAuthor.test.ts scripts/accountTime.test.ts
-cargo test --manifest-path src-tauri/Cargo.toml source_control::
+npm run build          # Type-check and build the frontend
+npm test               # Frontend diagnostics tests
+npm run test:backend   # Rust backend tests
 ```
 
-The controlled GitHub CLI fixture and live GitHub test are opt-in; the ordinary backend command above does not create a hosted repository.
+The v1 layout was checked with a frontend build, a macOS debug bundle and focused visual checks. The Git work was checked with disposable local repositories, a controlled GitHub CLI fixture and a private GitHub repository for creation, push, fetch and pull. The revised last-sign-in recording and switching between two real GitHub accounts have not yet been tested end to end. Hardware and full regression testing were outside the v1 layout validation.
 
-## v1 validation
+Additional documentation:
 
-The v1 design pass was checked with a production frontend build, a native macOS debug bundle, and focused visual checks of the workspace, native File menu and dock customization. A full regression or hardware test pass was intentionally outside this layout-focused change.
-
-The [earlier capability review](docs/ide-capabilities.md) records backend validation from 24 October; its roadmap is historical and predates the current Git, board and library panels. The [v1 layout notes](docs/design-v1.md) describe the original presentation, and the [changelog](CHANGELOG.md) records dated changes.
+- [GitHub and source control](docs/github-source-control.md)
+- [v1 layout notes](docs/design-v1.md)
+- [Earlier capability review](docs/ide-capabilities.md) — historical; its roadmap predates the current Git, board and library panels
+- [Changelog](CHANGELOG.md)
