@@ -1,4 +1,14 @@
-# Changelog (TL;DR)
+# Changelog
+
+## 1.0.0 — 27 October 2026
+
+- Implement the approved compact light workspace, centered document tabs and teal editor styling.
+- Replace the tall activity rail with a centered floating icon dock, hover labels and saved visibility settings.
+- Show the persistent terminal beside independent Serial Output, Build Output and Problems tabs.
+- Move file operations into native macOS menus and use an integrated native title bar.
+- Restyle project, file, outline, GitHub, library, board, debug, search and settings views.
+- Preserve existing development workflows; add readable library/board results and adjustable editor appearance.
+- Validate the frontend build, macOS app bundle and key visual states.
 
 ## 2025-10-16
 - Initial app created (Tauri 2 + React + TypeScript)

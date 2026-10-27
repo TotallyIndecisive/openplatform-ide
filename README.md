@@ -1,93 +1,67 @@
-# Openplatform IDE (Tauri + React)
+# OpenPlatform
 
-A lightweight, fast cross-platform IDE for Arduino and ESP32 development. It focuses on
-simple device recognition, code editing, compiling, and uploading to ESP32 boards, in a
-workspace modelled on [Zed](https://zed.dev).
+A focused macOS workspace for Arduino and ESP32 development. Built with Tauri, React, Monaco and PlatformIO.
 
-The editor layout, docks, panes, command palette and terminal follow Zed's model; the
-reverse-engineering notes behind those decisions are in [`docs/zed-analysis.md`](docs/zed-analysis.md).
+![OpenPlatform v1 workspace](docs/images/workspace-v1.jpg)
 
-## Features
+## Version 1 workspace
 
-- ESP32 board detection (manual port selection) with USB descriptor details
-- Monaco code editor for C/C++ with breadcrumbs, outline and sticky scroll
-- Compile and upload via PlatformIO Core (`pio run`, `pio run -t upload`)
-- Integrated terminal — a real PTY running your login shell
-- Separate build/upload output view with progress and one-click clear
-- Serial monitor (with safe DTR/RTS handling)
-- Fast upload with 921600 baud support
-- Project explorer, outline, project-wide search and file finder
-- Command palette, preview tabs, and a Zed-style activity bar / dock / status bar
-- New / Open / Save / Save As with native dialogs and a recent-projects list
-- Progress bar and non-blocking UI
-- Works on macOS and Linux
+- A light, compact editor with teal accents, centered open-file tabs, a minimap, breadcrumbs and syntax highlighting.
+- A short floating dock with small icons and hover/focus labels. Choose visible tools in Settings; the dock grows or shrinks to fit.
+- A persistent terminal beside a separate window for Serial Output, Build Output and Problems. Both windows can stay open together.
+- Native macOS menus for File, Edit, View, Build, Tools and Window. File actions are in the system menu bar rather than inside the workspace.
+- Consistent floating panels for projects, files, outline, GitHub, libraries, boards, basic OpenOCD controls and appearance settings.
 
-## Capabilities roadmap
+## Development tools
 
-Every capability the IDE has, in the order it was implemented, with the date it landed.
+- New, open and recent projects; ESP32, Arduino Uno and Nano templates; native Save / Save As dialogs.
+- Monaco C/C++ editing with clangd completion, hover, definitions, references, formatting and live diagnostics.
+- Project search, file finder, command palette, preview tabs and unsaved-file recovery.
+- Explicit PlatformIO build environment and USB serial port selection; identify, verify, upload and cancel controls.
+- Real PTY terminal with persistent scrollback and shell restart.
+- Serial receive/send, baud selection, None/LF/CRLF endings and automatic monitor release/resume around uploads.
+- Compiler diagnostics in the Problems view. Build, clean, test, analysis, dependency installation and compilation database commands.
+- Git status, staging, commit, branches, remotes, history, push/pull and GitHub publishing.
+- PlatformIO library search/install and searchable board catalogue. Configure the selected board in `platformio.ini`.
 
-1. **2026-10-18** — Project backend: load, create, and list recent projects; `platformio.ini`-compatible on-disk format.
-2. **2026-10-18** — File menu with New / Open Project and recent-project reopen.
-3. **2026-10-18** — File dropdown: New File, Open, Save, Save As via native dialogs, with a recent-projects list (max 10, stored at `~/.openplatform-ide/recent.json`).
-4. **2026-10-18** — PlatformIO build backend: compile and upload through `pio run` / `pio run -t upload`, replacing the old `arduino-cli` path.
-5. **2026-10-19** — Zed-style workspace: activity bar, collapsible resizable dock, tabbed pane with breadcrumbs, status bar, and the One Dark palette.
-6. **2026-10-19** — Command palette (⇧⌘P), file finder (⌘P), and project-wide search (⇧⌘F).
-7. **2026-10-19** — Preview-tab semantics, keybindings (⌘S / ⌥⌘S / ⌘B / ⌘W), and an in-process C/C++ outline scanner.
-8. **2026-10-19** — Integrated terminal: a real PTY running your login shell, opening in the project directory (or `$HOME` on a cold launch), with resize-aware reflow.
-9. **2026-10-19** — Separate build/upload output view, auto-revealed from the terminal when an identify, verify or upload starts.
-10. **2026-10-19** — Terminal survives panel toggles: the dock stays mounted so the shell session and scrollback persist.
+## Run locally
 
-## Quick start
+Requires Node.js/npm, Rust, PlatformIO Core and clangd. GitHub publishing uses `gh`; basic hardware debugging uses OpenOCD and a compatible JTAG probe.
 
-1. Install dependencies: `npm install`
-2. Run in dev: `npm run tauri dev`
-3. Build: `npm run tauri build`
+```sh
+npm install
+npm run tauri dev
+```
 
-## Requirements
+Build the macOS application:
 
-- Node.js + npm
-- Rust toolchain (for Tauri)
-- PlatformIO Core, with `pio` on the path used by the backend
-- ESP32 board connected via USB
+```sh
+npm run tauri -- build --debug --bundles app
+```
+
+The local app is written to `src-tauri/target/debug/bundle/macos/OpenPlatform.app`. This is a development build, not a signed/notarized installer.
 
 ## Keyboard shortcuts
 
 | Shortcut | Action |
-|---|---|
+| --- | --- |
 | ⇧⌘P | Command palette |
 | ⌘P | Go to file |
 | ⇧⌘F | Find in project |
-| ⌘S / ⌥⌘S / ⇧⌘S | Save / Save all / Save as |
-| ⌘B | Toggle sidebar |
+| ⌘O / ⇧⌘N | Open / new project |
+| ⌘N | New file |
+| ⌘S / ⌥⌘S / ⇧⌘S | Save / save all / save as |
 | ⌘W | Close tab |
-| ⌃\` | Toggle terminal |
+| ⌘B | Toggle auxiliary panel |
+| ⌃` | Toggle terminal |
+| ⌘, | Settings |
 
-## Reliability and C++ tooling update (24 October 2026)
+For C++ navigation, run **Build → Generate Compilation Database** after opening a new project or changing its environment. F12 goes to a definition. Appearance settings and dock visibility are remembered locally.
 
-See [the capability review](docs/ide-capabilities.md) for implemented changes, hardware
-validation, and the remaining work toward full IDE parity.
+Tool executable overrides are `OPENPLATFORM_PIO`, `OPENPLATFORM_CLANGD` and `OPENPLATFORM_CODE`. `OPENPLATFORM_PROJECT` selects the initial project; otherwise the most recent existing project opens.
 
-Upload now uses one incremental PlatformIO invocation. Select a build environment and
-port in the toolbar; Stop cancels the active task. The monitor releases the port before
-upload and resumes afterward. Failed saves prevent build/upload, and external file
-changes produce a conflict instead of being silently overwritten.
+## v1 validation
 
-C++ features use a locally installed `clangd`. Open the command palette and run
-**Build: Generate Compilation Database** after opening a project or changing its board,
-flags, or dependencies. F12 navigates to definitions. Completion, hover, references,
-formatting, live diagnostics and a compiler Problems panel are available.
+The v1 design pass was checked with a production frontend build, a native macOS debug bundle, and focused visual checks of the workspace, native File menu and dock customization. A full regression or hardware test pass was intentionally outside this layout-focused change.
 
-The palette also exposes Clean, Static Analysis, Run Tests, Install Dependencies,
-Check Toolchain, Reload File, and Arduino Uno/Nano project templates. ESP32 remains
-the default. Libraries and advanced board settings stay in `platformio.ini`.
-
-```sh
-npm test
-npm run test:backend
-npm run build
-npm run tauri -- build --debug --bundles app  # local macOS test bundle
-```
-
-Tests use Node's TypeScript stripping (Node 22.6+). The hardware example is in
-`examples/esp32-led`; it toggles GPIO 23 and logs to serial at 115200 baud. The Uno
-example uses `LED_BUILTIN`. Only flash the example for the board actually connected.
+The [earlier capability review](docs/ide-capabilities.md) records backend validation from 24 October; its roadmap is historical and predates the current Git, board and library panels. The [v1 layout notes](docs/design-v1.md) describe the current presentation.

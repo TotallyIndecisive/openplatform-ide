@@ -6,13 +6,25 @@ import { connectLanguage } from "./language";
 import { parseDiagnostic, type BuildDiagnostic } from "./diagnostics";
 import { listen } from "@tauri-apps/api/event";
 import { loader, Editor } from "@monaco-editor/react";
-import { open as openDialog, save as saveDialog, confirm } from "@tauri-apps/plugin-dialog";
+import {
+  open as openDialog,
+  save as saveDialog,
+  confirm,
+} from "@tauri-apps/plugin-dialog";
 import * as monaco from "monaco-editor";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import "./App.css";
+import { Icon } from "./Icons";
+import {
+  GitPanel,
+  DebugPanel,
+  LibrariesPanel,
+  BoardsPanel,
+} from "./WorkspacePanels";
+import { dockItems, usePreferences } from "./preferences";
 
 // Bundle Monaco locally (no CDN at runtime).
 (self as any).MonacoEnvironment = {
@@ -52,12 +64,12 @@ type FileHit = { path: string; line: number; text: string };
 
 /** A buffer in the workspace, mirroring Zed's `workspace::item::Item`. */
 type Buffer = {
-  path: string;       // workspace-relative, e.g. "src/main.cpp"
-  abs: string;        // absolute path on disk
+  path: string; // workspace-relative, e.g. "src/main.cpp"
+  abs: string; // absolute path on disk
   language: string;
   value: string;
-  saved: string;      // last value written to disk (drives the dirty dot)
-  preview?: boolean;  // Zed's preview tab: replaced on the next single click
+  saved: string; // last value written to disk (drives the dirty dot)
+  preview?: boolean; // Zed's preview tab: replaced on the next single click
 };
 
 const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
@@ -68,36 +80,47 @@ const MAX_SERIAL = 20000;
 function languageFor(name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   switch (ext) {
-    case "c": case "cc": case "cpp": case "cxx":
-    case "h": case "hh": case "hpp": case "hxx": case "ino": case "s":
+    case "c":
+    case "cc":
+    case "cpp":
+    case "cxx":
+    case "h":
+    case "hh":
+    case "hpp":
+    case "hxx":
+    case "ino":
+    case "s":
       return "cpp";
-    case "py": return "python";
-    case "json": return "json";
-    case "ini": case "cfg": case "conf": return "ini";
-    case "md": return "markdown";
-    case "yaml": case "yml": return "yaml";
-    case "toml": return "toml";
-    case "xml": return "xml";
-    case "js": return "javascript";
-    case "ts": return "typescript";
-    case "sh": return "shell";
-    default: return "plaintext";
+    case "py":
+      return "python";
+    case "json":
+      return "json";
+    case "ini":
+    case "cfg":
+    case "conf":
+      return "ini";
+    case "md":
+      return "markdown";
+    case "yaml":
+    case "yml":
+      return "yaml";
+    case "toml":
+      return "toml";
+    case "xml":
+      return "xml";
+    case "js":
+      return "javascript";
+    case "ts":
+      return "typescript";
+    case "sh":
+      return "shell";
+    default:
+      return "plaintext";
   }
 }
 
 function baseName(p: string) {
   return p.split("/").pop() ?? p;
-}
-
-function fileIcon(name: string, isDir: boolean) {
-  if (isDir) return "▸";
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  if (["c", "cc", "cpp", "cxx", "h", "hh", "hpp", "hxx", "ino"].includes(ext)) return "Ⓒ";
-  if (ext === "py") return "🐍";
-  if (ext === "ini" || ext === "toml" || ext === "cfg") return "⚙";
-  if (ext === "json") return "{}";
-  if (ext === "md") return "▤";
-  return "▫";
 }
 
 /** One entry in a `modal_layer` overlay (palette / finder / search). */
@@ -125,7 +148,7 @@ export default function App() {
   const [lineEnding, setLineEnding] = useState("\n");
   const taskLock = useRef(false);
   const cancelRequested = useRef(false);
-  const jobRef = useRef<{id: string; root: string} | null>(null);
+  const jobRef = useRef<{ id: string; root: string } | null>(null);
   const eventsReady = useRef<Promise<unknown>>(Promise.resolve());
   const serialOpenRef = useRef(false);
   serialOpenRef.current = serialOpen;
@@ -135,22 +158,59 @@ export default function App() {
   const [activePath, setActivePath] = useState<string>("");
   const [treeRoot, setTreeRoot] = useState<FileNode[]>([]);
   const [expanded, setExpanded] = useState<Record<string, FileNode[]>>({});
-  const [panel, setPanel] = useState<"files" | "outline" | "serial" | "problems" | "git" | "debug" | "libraries" | "boards">("files");
-  const [panelOpen, setPanelOpen] = useState(true);
-  const [panelWidth, setPanelWidth] = useState(240);
+  const [panel, setPanel] = useState<
+    | "home"
+    | "files"
+    | "outline"
+    | "git"
+    | "debug"
+    | "libraries"
+    | "boards"
+    | "settings"
+  >("files");
+  const [panelOpen, setPanelOpen] = useState(false);
   const [outline, setOutline] = useState<Symbol[]>([]);
-  const [overlay, setOverlay] = useState<null | "palette" | "finder" | "search">(null);
+  const [overlay, setOverlay] = useState<
+    null | "palette" | "finder" | "search"
+  >(null);
   const [overlayQuery, setOverlayQuery] = useState("");
   const [overlaySel, setOverlaySel] = useState(0);
   const [overlayItems, setOverlayItems] = useState<Item[]>([]);
   const [cursor, setCursor] = useState({ line: 1, col: 1 });
-  const [buildState, setBuildState] = useState<"idle" | "ok" | "err" | "cancelled">("idle");
+  const [buildState, setBuildState] = useState<
+    "idle" | "ok" | "err" | "cancelled"
+  >("idle");
 
-  // The bottom region shows exactly one view at a time: the terminal or the
-  // build/upload output. `null` means the region is collapsed.
-  const [bottom, setBottom] = useState<"terminal" | "output" | null>(null);
-  const termOpen = bottom === "terminal";
-  const outOpen = bottom === "output";
+  const [termOpen, setTermOpen] = useState(true);
+  const [rightOpen, setRightOpen] = useState(true);
+  const [rightTab, setRightTab] = useState<"serial" | "output" | "problems">(
+    "serial",
+  );
+  const outOpen = rightOpen && rightTab === "output";
+  const [bottomExpanded, setBottomExpanded] = useState(false);
+  const [preferences, setPreferences] = usePreferences();
+  const [branch, setBranch] = useState("");
+  const [shellName, setShellName] = useState("shell");
+  const refreshBranch = useCallback(async () => {
+    if (!projectDir) {
+      setBranch("");
+      return;
+    }
+    try {
+      const result = await invoke<{ success: boolean; output: string }>(
+        "git_status",
+        { projectDir },
+      );
+      setBranch(
+        result.success ? (result.output.replace(/^## (?:No commits yet on |Initial commit on )/, "## ").match(/^## (.+?)(?:\.\.\.|\n|$)/)?.[1] ?? "") : "",
+      );
+    } catch {
+      setBranch("");
+    }
+  }, [projectDir]);
+  useEffect(() => {
+    void refreshBranch();
+  }, [refreshBranch]);
   const [termCwd, setTermCwd] = useState("");
 
   const serRef = useRef<HTMLPreElement>(null);
@@ -173,10 +233,9 @@ export default function App() {
   // without a race between `invoke` resolving and the exit event arriving.
   const exitResolver = useRef<((code: number | null) => void) | null>(null);
 
-
   const log = useCallback(
     (s: string) => setOut((o) => [...o, s].slice(-3000)),
-    []
+    [],
   );
 
   function onCliExit(code: number | null) {
@@ -188,7 +247,9 @@ export default function App() {
   }
 
   function waitExit(): Promise<number | null> {
-    return new Promise(resolve => { exitResolver.current = resolve; });
+    return new Promise((resolve) => {
+      exitResolver.current = resolve;
+    });
   }
 
   const active = buffers.find((b) => b.path === activePath) ?? null;
@@ -201,7 +262,9 @@ export default function App() {
       const p = await invoke<Port[]>("list_serial_ports");
       setPorts(p);
       const usb = p.find((x) => x.isUsb);
-      setPort((cur) => p.some(x => x.address === cur) ? cur : usb?.address || "");
+      setPort((cur) =>
+        p.some((x) => x.address === cur) ? cur : usb?.address || "",
+      );
     } catch (e) {
       log(`scan error: ${e}`);
     }
@@ -219,30 +282,52 @@ export default function App() {
   // ---- startup + event wiring ----
   useEffect(() => {
     const offs: Array<Promise<() => void>> = [];
-    offs.push(listen("app-exit-requested", () => { void getCurrentWindow().close(); }));
     offs.push(
-      listen<{ jobId: string; stream: string; line: string }>("cli-output", (e) => {
-        if (e.payload.jobId !== jobRef.current?.id) return;
-        const line = stripAnsi(e.payload.line);
-        setOut((o) => [...o, line].slice(-3000));
-        const diagnostic = parseDiagnostic(line, jobRef.current.root);
-        if (diagnostic) setDiagnostics(ds => [...ds, diagnostic].slice(-1000));
-        if (line.trim()) setStatus(line.trim().slice(0, 140));
-        // esptool reports flashing progress as: `Writing at 0x00010000... (42 %)`
-        const m = line.match(/(?:\(|\s)(\d+(?:\.\d+)?)\s*%/);
-        if (m) setProgress(Number(m[1]));
-        else if (/Hash of data verified/i.test(line)) setProgress(100);
-      })
+      listen("app-exit-requested", () => {
+        void getCurrentWindow().close();
+      }),
     );
     offs.push(
-      listen<{ jobId: string; code: number | null; args: string[]; cancelled: boolean; elapsedMs: number }>("cli-exit", (e) => {
+      listen<{ jobId: string; stream: string; line: string }>(
+        "cli-output",
+        (e) => {
+          if (e.payload.jobId !== jobRef.current?.id) return;
+          const line = stripAnsi(e.payload.line);
+          setOut((o) => [...o, line].slice(-3000));
+          const diagnostic = parseDiagnostic(line, jobRef.current.root);
+          if (diagnostic)
+            setDiagnostics((ds) => [...ds, diagnostic].slice(-1000));
+          if (line.trim()) setStatus(line.trim().slice(0, 140));
+          // esptool reports flashing progress as: `Writing at 0x00010000... (42 %)`
+          const m = line.match(/(?:\(|\s)(\d+(?:\.\d+)?)\s*%/);
+          if (m) setProgress(Number(m[1]));
+          else if (/Hash of data verified/i.test(line)) setProgress(100);
+        },
+      ),
+    );
+    offs.push(
+      listen<{
+        jobId: string;
+        code: number | null;
+        args: string[];
+        cancelled: boolean;
+        elapsedMs: number;
+      }>("cli-exit", (e) => {
         if (e.payload.jobId !== jobRef.current?.id) return;
         setProgress(null);
         setStatus("");
-        setBuildState(e.payload.cancelled ? "cancelled" : e.payload.code === 0 ? "ok" : "err");
-        log(`\n[${e.payload.cancelled ? "cancelled" : `exit ${e.payload.code}`} · ${(e.payload.elapsedMs / 1000).toFixed(2)}s] pio ${e.payload.args.join(" ")}`);
+        setBuildState(
+          e.payload.cancelled
+            ? "cancelled"
+            : e.payload.code === 0
+              ? "ok"
+              : "err",
+        );
+        log(
+          `\n[${e.payload.cancelled ? "cancelled" : `exit ${e.payload.code}`} · ${(e.payload.elapsedMs / 1000).toFixed(2)}s] pio ${e.payload.args.join(" ")}`,
+        );
         onCliExit(e.payload.code);
-      })
+      }),
     );
     offs.push(
       listen<{ data: string }>("serial-data", (e) => {
@@ -250,7 +335,7 @@ export default function App() {
           const next = t + e.payload.data;
           return next.length > MAX_SERIAL ? next.slice(-MAX_SERIAL) : next;
         });
-      })
+      }),
     );
     offs.push(
       listen<{ open: boolean; port: string; message: string }>(
@@ -258,22 +343,25 @@ export default function App() {
         (e) => {
           setSerialOpen(e.payload.open);
           log(`[serial] ${e.payload.message}`);
-        }
-      )
+        },
+      ),
     );
     offs.push(
       listen<{ data: string }>("terminal-data", (e) => {
         termRef.current?.write(e.payload.data);
-      })
+      }),
     );
     offs.push(
       listen<{ open: boolean; cwd: string; shell: string; message: string }>(
         "terminal-status",
         (e) => {
-          if (e.payload.open) setTermCwd(e.payload.cwd);
+          if (e.payload.open) {
+            setTermCwd(e.payload.cwd);
+            setShellName(baseName(e.payload.shell));
+          }
           log(`[terminal] ${e.payload.message}`);
-        }
-      )
+        },
+      ),
     );
     eventsReady.current = Promise.all(offs);
     const polling = setInterval(scan, 2500);
@@ -324,21 +412,34 @@ export default function App() {
       allowProposedApi: true,
       scrollback: 10000,
       theme: {
-        background: "#171a1e",
-        foreground: "#abb2bf",
-        cursor: "#4c8bf5",
-        selectionBackground: "#3a4048",
-        black: "#1e2227", red: "#e06c75", green: "#98c379", yellow: "#e5c07b",
-        blue: "#4c8bf5", magenta: "#c678dd", cyan: "#56b6c2", white: "#abb2bf",
-        brightBlack: "#7f848e", brightRed: "#e06c75", brightGreen: "#98c379",
-        brightYellow: "#e5c07b", brightBlue: "#61afef", brightMagenta: "#c678dd",
-        brightCyan: "#56b6c2", brightWhite: "#d7dae0",
+        background: "#ffffff",
+        foreground: "#26364d",
+        cursor: "#008b87",
+        selectionBackground: "#d6eeec",
+        black: "#26364d",
+        red: "#c34242",
+        green: "#20805b",
+        yellow: "#9b701d",
+        blue: "#286fc5",
+        magenta: "#8952c7",
+        cyan: "#008b87",
+        white: "#dce2e8",
+        brightBlack: "#7f848e",
+        brightRed: "#e06c75",
+        brightGreen: "#98c379",
+        brightYellow: "#e5c07b",
+        brightBlue: "#61afef",
+        brightMagenta: "#c678dd",
+        brightCyan: "#56b6c2",
+        brightWhite: "#d7dae0",
       },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     // Keystrokes go straight to the child's stdin.
-    term.onData((d) => { invoke("terminal_write", { data: d }).catch(() => {}); });
+    term.onData((d) => {
+      invoke("terminal_write", { data: d }).catch(() => {});
+    });
     termRef.current = term;
     fitRef.current = fit;
     return term;
@@ -355,50 +456,46 @@ export default function App() {
       if (termHostRef.current && !term.element) {
         term.open(termHostRef.current);
       }
-      try { fit?.fit(); } catch { /* host not laid out yet */ }
+      try {
+        fit?.fit();
+      } catch {
+        /* host not laid out yet */
+      }
       const cols = term.cols || 80;
       const rows = term.rows || 24;
       termStartedRef.current = true;
       try {
-        const used = await invoke<string>("terminal_start", { cwd: dir, cols, rows });
+        const used = await invoke<string>("terminal_start", {
+          cwd: dir,
+          cols,
+          rows,
+        });
         setTermCwd(used);
       } catch (e) {
         term.writeln(`\x1b[31mfailed to start terminal: ${e}\x1b[0m`);
         log(`terminal_start error: ${e}`);
       }
     },
-    [ensureTerminal, resolveTerminalCwd, log]
+    [ensureTerminal, resolveTerminalCwd, log],
   );
   termStartRef.current = startTerminal;
 
-  /** Activity-bar / menu entry point. */
-  const toggleTerminal = useCallback(() => {
-    setBottom((cur) => {
-      const next = cur === "terminal" ? null : "terminal";
-      termOpenRef.current = next === "terminal";
-      // Spawn only once: the host div stays mounted, so revealing the dock is
-      // enough on later toggles. Restarting here is what produced a second,
-      // "old" terminal every time the button was pressed.
-      if (next === "terminal" && !termStartedRef.current) {
-        termStartedRef.current = true;
-        setTimeout(() => termStartRef.current?.(), 0);
-      }
-      return next;
-    });
-  }, []);
-
-  /** Activity-bar / menu entry point for the build & upload output. */
+  const toggleTerminal = useCallback(() => setTermOpen((open) => !open), []);
   const toggleOutput = useCallback(() => {
-    setBottom((cur) => (cur === "output" ? null : "output"));
-  }, []);
-
-  /** Bring the output forward when a build step starts.
-   *
-   * If the user is sitting in the terminal, switch to the output so the run is
-   * visible; otherwise leave their current view alone. */
+    setRightOpen((open) => (rightTab === "output" ? !open : true));
+    setRightTab("output");
+  }, [rightTab]);
   const revealOutput = useCallback(() => {
-    setBottom("output");
+    setRightTab("output");
+    setRightOpen(true);
   }, []);
+  useEffect(() => {
+    termOpenRef.current = termOpen;
+    if (termOpen && projectDir && !termStartedRef.current) {
+      termStartedRef.current = true;
+      void eventsReady.current.then(() => termStartRef.current?.());
+    }
+  }, [termOpen, projectDir]);
 
   // The host div is always mounted, so attach xterm to it once. This effect
   // only keeps the grid sized while the dock is visible.
@@ -413,9 +510,13 @@ export default function App() {
       try {
         fitRef.current?.fit();
         if (term.cols && term.rows) {
-          invoke("terminal_resize", { cols: term.cols, rows: term.rows }).catch(() => {});
+          invoke("terminal_resize", { cols: term.cols, rows: term.rows }).catch(
+            () => {},
+          );
         }
-      } catch { /* ignore transient layout */ }
+      } catch {
+        /* ignore transient layout */
+      }
     };
     fit();
     const ro = new ResizeObserver(fit);
@@ -436,20 +537,23 @@ export default function App() {
         log(`tree error: ${e}`);
       }
     },
-    [log]
+    [log],
   );
 
   /** Zed's preview tab: a single click opens italic and is replaced by the
    *  next preview; typing (or double-click) promotes it to a pinned tab. */
   const openFile = useCallback(
     async (abs: string, opts: { preview?: boolean; pin?: boolean } = {}) => {
-      const rel = projectDir && abs.startsWith(projectDir + "/")
-        ? abs.slice(projectDir.length + 1)
-        : abs;
+      const rel =
+        projectDir && abs.startsWith(projectDir + "/")
+          ? abs.slice(projectDir.length + 1)
+          : abs;
       const existing = buffersRef.current.find((b) => b.path === rel);
       if (existing) {
         if (opts.pin) {
-          setBuffers((bs) => bs.map((b) => (b.path === rel ? { ...b, preview: false } : b)));
+          setBuffers((bs) =>
+            bs.map((b) => (b.path === rel ? { ...b, preview: false } : b)),
+          );
         }
         setActivePath(rel);
         return;
@@ -484,22 +588,35 @@ export default function App() {
       });
       setActivePath(rel);
     },
-    [projectDir, log]
+    [projectDir, log],
   );
 
   /** Load a PlatformIO project: reset buffers, then open ini + main.cpp. */
   const openProjectDir = useCallback(
     async (dir: string) => {
-      if (taskLock.current) { log("Wait for the running task before switching projects."); return; }
-      if (buffersRef.current.some(b => b.value !== b.saved) && !await confirm("Discard unsaved edits and switch projects?", { title: "Unsaved files", kind: "warning" })) return;
-      try { await invoke("read_file", {path: `${dir}/platformio.ini`}); }
-      catch (e) { log(`Open failed: ${e}`); return; }
-
+      if (taskLock.current) {
+        log("Wait for the running task before switching projects.");
+        return;
+      }
+      if (
+        buffersRef.current.some((b) => b.value !== b.saved) &&
+        !(await confirm("Discard unsaved edits and switch projects?", {
+          title: "Unsaved files",
+          kind: "warning",
+        }))
+      )
+        return;
+      try {
+        await invoke("read_file", { path: `${dir}/platformio.ini` });
+      } catch (e) {
+        log(`Open failed: ${e}`);
+        return;
+      }
 
       // Read everything before touching state, so the reset and the initial
       // tabs land in one commit instead of racing each other.
       const initial: Buffer[] = [];
-      for (const rel of [DEFAULT_INI_PATH, DEFAULT_SRC_PATH]) {
+      for (const rel of [DEFAULT_SRC_PATH, DEFAULT_INI_PATH]) {
         const abs = `${dir}/${rel}`;
         try {
           const value = await invoke<string>("read_file", { path: abs });
@@ -517,36 +634,52 @@ export default function App() {
       }
 
       try {
-        const drafts: Buffer[] = JSON.parse(localStorage.getItem(`drafts:${dir}`) ?? "[]");
+        const drafts: Buffer[] = JSON.parse(
+          localStorage.getItem(`drafts:${dir}`) ?? "[]",
+        );
         for (const draft of drafts) {
-          if (!draft.abs?.startsWith(dir + "/") || draft.value === draft.saved) continue;
-          const index = initial.findIndex(b => b.abs === draft.abs);
+          if (!draft.abs?.startsWith(dir + "/") || draft.value === draft.saved)
+            continue;
+          const index = initial.findIndex((b) => b.abs === draft.abs);
           // Keep the original disk baseline so a concurrent external edit is
           // detected by Save, rather than silently overwritten by recovery.
-          if (index >= 0) initial[index] = {...draft, preview: false};
-          else initial.push({...draft, preview: false});
+          if (index >= 0) initial[index] = { ...draft, preview: false };
+          else initial.push({ ...draft, preview: false });
         }
         if (drafts.length) log("Recovered unsaved editor drafts.");
-      } catch { /* A corrupt recovery record must not prevent opening a project. */ }
+      } catch {
+        /* A corrupt recovery record must not prevent opening a project. */
+      }
+      setPanelOpen(false);
       setProjectDir(dir);
       setExpanded({});
       setOutline([]);
       setDiagnostics([]);
       buffersRef.current = initial;
       setBuffers(initial);
-      setActivePath(initial[initial.length - 1]?.path ?? "");
+      setActivePath(initial.find(b => b.path === DEFAULT_SRC_PATH)?.path ?? initial[0]?.path ?? "");
 
       try {
-        const envs = await invoke<string[]>("project_environments", {projectDir: dir});
+        const envs = await invoke<string[]>("project_environments", {
+          projectDir: dir,
+        });
         setEnvironments(envs);
         const savedEnv = localStorage.getItem(`environment:${dir}`);
-        setEnvironment(savedEnv && envs.includes(savedEnv) ? savedEnv : envs[0] ?? "");
-      } catch (e) { setEnvironments([]); setEnvironment(""); log(`PlatformIO configuration: ${e}`); }
+        setEnvironment(
+          savedEnv && envs.includes(savedEnv) ? savedEnv : (envs[0] ?? ""),
+        );
+      } catch (e) {
+        setEnvironments([]);
+        setEnvironment("");
+        log(`PlatformIO configuration: ${e}`);
+      }
       await refreshTree(dir);
-      invoke("add_recent", { projectDir: dir }).then(loadRecents).catch(() => {});
+      invoke("add_recent", { projectDir: dir })
+        .then(loadRecents)
+        .catch(() => {});
       log(`Opened project: ${dir}`);
     },
-    [refreshTree, loadRecents, log]
+    [refreshTree, loadRecents, log],
   );
 
   const updateActive = useCallback((text: string) => {
@@ -554,8 +687,8 @@ export default function App() {
       bs.map((b) =>
         b.path === activeRef.current
           ? { ...b, value: text, preview: false } // editing promotes a preview
-          : b
-      )
+          : b,
+      ),
     );
   }, []);
 
@@ -576,16 +709,25 @@ export default function App() {
         log(`tree error: ${e}`);
       }
     },
-    [expanded, log]
+    [expanded, log],
   );
 
   const closeBuffer = useCallback(async (path: string) => {
-    const buffer = buffersRef.current.find(b => b.path === path);
-    if (buffer && buffer.value !== buffer.saved && !await confirm(`Discard unsaved edits in ${baseName(path)}?`, {title: "Unsaved file", kind: "warning"})) return;
-    setBuffers(bs => {
-      const idx = bs.findIndex(b => b.path === path);
-      const next = bs.filter(b => b.path !== path);
-      if (path === activeRef.current) setActivePath(next[Math.min(idx, next.length - 1)]?.path ?? "");
+    const buffer = buffersRef.current.find((b) => b.path === path);
+    if (
+      buffer &&
+      buffer.value !== buffer.saved &&
+      !(await confirm(`Discard unsaved edits in ${baseName(path)}?`, {
+        title: "Unsaved file",
+        kind: "warning",
+      }))
+    )
+      return;
+    setBuffers((bs) => {
+      const idx = bs.findIndex((b) => b.path === path);
+      const next = bs.filter((b) => b.path !== path);
+      if (path === activeRef.current)
+        setActivePath(next[Math.min(idx, next.length - 1)]?.path ?? "");
       return next;
     });
   }, []);
@@ -594,21 +736,35 @@ export default function App() {
   useEffect(() => {
     if (!projectDir) return;
     const timer = setTimeout(() => {
-      try { localStorage.setItem(`drafts:${projectDir}`, JSON.stringify(buffers.filter(b => b.value !== b.saved))); }
-      catch { log("Draft recovery storage is full. Save your open files."); }
+      try {
+        localStorage.setItem(
+          `drafts:${projectDir}`,
+          JSON.stringify(buffers.filter((b) => b.value !== b.saved)),
+        );
+      } catch {
+        log("Draft recovery storage is full. Save your open files.");
+      }
     }, 400);
     return () => clearTimeout(timer);
   }, [buffers, projectDir, log]);
 
   useEffect(() => {
-    const off = getCurrentWindow().onCloseRequested(async event => {
-      if (taskLock.current || buffersRef.current.some(b => b.value !== b.saved)) {
+    const off = getCurrentWindow().onCloseRequested(async (event) => {
+      if (
+        taskLock.current ||
+        buffersRef.current.some((b) => b.value !== b.saved)
+      ) {
         event.preventDefault();
-        const close = await confirm("Close the IDE? Unsaved edits remain in local recovery and any running task will be stopped.", { title: "Close Openplatform IDE", kind: "warning" });
+        const close = await confirm(
+          "Close the IDE? Unsaved edits remain in local recovery and any running task will be stopped.",
+          { title: "Close Openplatform IDE", kind: "warning" },
+        );
         if (close) await getCurrentWindow().destroy();
       }
     });
-    return () => { void off.then(f => f()); };
+    return () => {
+      void off.then((f) => f());
+    };
   }, []);
 
   // Reload clean files edited in VS Code. Dirty files retain their original
@@ -618,9 +774,18 @@ export default function App() {
       for (const b of buffersRef.current) {
         if (b.value !== b.saved) continue;
         try {
-          const disk = await invoke<string>("read_file", {path:b.abs});
-          if (disk !== b.saved) setBuffers(bs => bs.map(x => x.abs === b.abs && x.value === b.value && x.saved === b.saved ? {...x, value:disk, saved:disk} : x));
-        } catch { /* Deleted files are reported if the user tries to save. */ }
+          const disk = await invoke<string>("read_file", { path: b.abs });
+          if (disk !== b.saved)
+            setBuffers((bs) =>
+              bs.map((x) =>
+                x.abs === b.abs && x.value === b.value && x.saved === b.saved
+                  ? { ...x, value: disk, saved: disk }
+                  : x,
+              ),
+            );
+        } catch {
+          /* Deleted files are reported if the user tries to save. */
+        }
       }
       if (projectDir) void refreshTree(projectDir);
     };
@@ -635,43 +800,86 @@ export default function App() {
     // Delay startup one tick so StrictMode's discarded mount does not launch
     // a second native language process.
     const timer = setTimeout(() => {
-      connectLanguage(projectDir, log, status => { if (!stale) setLanguageStatus(status); })
-        .then(client => { if (stale) client.dispose(); else connection = client; })
-        .catch(e => { if (!stale) { setLanguageStatus("C++ unavailable"); log(`[clangd] ${e}`); } });
+      connectLanguage(projectDir, log, (status) => {
+        if (!stale) setLanguageStatus(status);
+      })
+        .then((client) => {
+          if (stale) client.dispose();
+          else connection = client;
+        })
+        .catch((e) => {
+          if (!stale) {
+            setLanguageStatus("C++ unavailable");
+            log(`[clangd] ${e}`);
+          }
+        });
     }, 100);
-    return () => { stale = true; clearTimeout(timer); connection?.dispose(); };
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+      connection?.dispose();
+    };
   }, [projectDir, languageRevision, log]);
 
   useEffect(() => {
-    const registration = monaco.editor.registerEditorOpener({ openCodeEditor: async (_source, uri, selection) => {
-      if (uri.scheme !== "file") return false;
-      await openFile(uri.fsPath, {pin:true});
-      setTimeout(() => {
-        const ed = editorRef.current;
-        if (!ed || !selection) return;
-        if ("startLineNumber" in selection) { ed.setSelection(selection); ed.revealRangeInCenter(selection); }
-        else { ed.setPosition(selection); ed.revealPositionInCenter(selection); }
-      }, 80);
-      return true;
-    } });
+    const registration = monaco.editor.registerEditorOpener({
+      openCodeEditor: async (_source, uri, selection) => {
+        if (uri.scheme !== "file") return false;
+        await openFile(uri.fsPath, { pin: true });
+        setTimeout(() => {
+          const ed = editorRef.current;
+          if (!ed || !selection) return;
+          if ("startLineNumber" in selection) {
+            ed.setSelection(selection);
+            ed.revealRangeInCenter(selection);
+          } else {
+            ed.setPosition(selection);
+            ed.revealPositionInCenter(selection);
+          }
+        }, 80);
+        return true;
+      },
+    });
     return () => registration.dispose();
   }, [openFile]);
 
   useEffect(() => {
     for (const model of monaco.editor.getModels()) {
       const path = model.uri.fsPath;
-      monaco.editor.setModelMarkers(model, "platformio", diagnostics.filter(d => d.path === path).map(d => ({
-        startLineNumber:d.line, endLineNumber:d.line, startColumn:d.column, endColumn:d.column + 1,
-        message:d.message, severity:d.severity === "error" ? monaco.MarkerSeverity.Error : d.severity === "warning" ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Info,
-      })));
+      monaco.editor.setModelMarkers(
+        model,
+        "platformio",
+        diagnostics
+          .filter((d) => d.path === path)
+          .map((d) => ({
+            startLineNumber: d.line,
+            endLineNumber: d.line,
+            startColumn: d.column,
+            endColumn: d.column + 1,
+            message: d.message,
+            severity:
+              d.severity === "error"
+                ? monaco.MarkerSeverity.Error
+                : d.severity === "warning"
+                  ? monaco.MarkerSeverity.Warning
+                  : monaco.MarkerSeverity.Info,
+          })),
+      );
     }
   }, [diagnostics, activePath]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      const openUris = new Set(buffersRef.current.map(b => monaco.Uri.file(b.abs).toString()));
+      const openUris = new Set(
+        buffersRef.current.map((b) => monaco.Uri.file(b.abs).toString()),
+      );
       for (const model of monaco.editor.getModels()) {
-        if (model.uri.scheme === "file" && !openUris.has(model.uri.toString()) && editorRef.current?.getModel() !== model) model.dispose();
+        if (
+          model.uri.scheme === "file" &&
+          !openUris.has(model.uri.toString()) &&
+          editorRef.current?.getModel() !== model
+        )
+          model.dispose();
       }
     }, 0);
     return () => clearTimeout(timer);
@@ -685,7 +893,10 @@ export default function App() {
     }
     let cancelled = false;
     const t = setTimeout(() => {
-      invoke<Symbol[]>("document_symbols", { path: active.abs, content: active.value })
+      invoke<Symbol[]>("document_symbols", {
+        path: active.abs,
+        content: active.value,
+      })
         .then((s) => !cancelled && setOutline(s))
         .catch(() => !cancelled && setOutline([]));
     }, 250);
@@ -707,9 +918,15 @@ export default function App() {
 
   async function saveBuffer(b: Buffer): Promise<boolean> {
     try {
-      await invoke("write_file", { path: b.abs, content: b.value, expected: b.saved });
+      await invoke("write_file", {
+        path: b.abs,
+        content: b.value,
+        expected: b.saved,
+      });
       setBuffers((bs) =>
-        bs.map((x) => (x.abs === b.abs ? { ...x, saved: b.value, preview: false } : x))
+        bs.map((x) =>
+          x.abs === b.abs ? { ...x, saved: b.value, preview: false } : x,
+        ),
       );
       return true;
     } catch (e) {
@@ -720,7 +937,7 @@ export default function App() {
 
   async function saveAll() {
     for (const b of buffersRef.current) {
-      if (b.value !== b.saved && !await saveBuffer(b)) return false;
+      if (b.value !== b.saved && !(await saveBuffer(b))) return false;
     }
     log("✓ Saved");
     return true;
@@ -742,8 +959,17 @@ export default function App() {
     try {
       const dir = await invoke<string>("create_new_project", {
         projectDir: dest,
-        platformioIni: template === "esp32" ? DEFAULT_PIO_INI : `[env:${template}]\nplatform = atmelavr\nboard = ${template === "uno" ? "uno" : "nanoatmega328"}\nframework = arduino\nmonitor_speed = 115200\n`,
-        srcContent: template === "esp32" ? DEFAULT_SRC : DEFAULT_SRC.replace("#define LED_PIN 23", "#define LED_PIN LED_BUILTIN"),
+        platformioIni:
+          template === "esp32"
+            ? DEFAULT_PIO_INI
+            : `[env:${template}]\nplatform = atmelavr\nboard = ${template === "uno" ? "uno" : "nanoatmega328"}\nframework = arduino\nmonitor_speed = 115200\n`,
+        srcContent:
+          template === "esp32"
+            ? DEFAULT_SRC
+            : DEFAULT_SRC.replace(
+                "#define LED_PIN 23",
+                "#define LED_PIN LED_BUILTIN",
+              ),
       });
       await openProjectDir(dir);
       log(`Created project: ${dir}`);
@@ -767,17 +993,14 @@ export default function App() {
     await openProjectDir(dir);
   }
 
-  const pickFolder = useCallback(
-    async (title: string, defaultPath: string) => {
-      const dest = await saveDialog({
-        title,
-        defaultPath,
-        canCreateDirectories: true,
-      });
-      return typeof dest === "string" ? dest : null;
-    },
-    []
-  );
+  const pickFolder = useCallback(async (title: string, defaultPath: string) => {
+    const dest = await saveDialog({
+      title,
+      defaultPath,
+      canCreateDirectories: true,
+    });
+    return typeof dest === "string" ? dest : null;
+  }, []);
 
   /** Save As — write the active buffer (or the whole project) elsewhere. */
   async function saveAs() {
@@ -793,7 +1016,10 @@ export default function App() {
       }
       return;
     }
-    const dest = await pickFolder("Save project as (choose target folder)", "MyProject");
+    const dest = await pickFolder(
+      "Save project as (choose target folder)",
+      "MyProject",
+    );
     if (!dest) return;
     try {
       const dir = await invoke<string>("write_pio_project", {
@@ -834,42 +1060,49 @@ export default function App() {
   const actionsRef = useRef<Record<string, () => void>>({});
 
   const commands = useMemo(
-    () => [
-      ["File: New Project", "⇧⌘N"],
-      ["File: New Arduino Uno Project", ""],
-      ["File: New Arduino Nano Project", ""],
-      ["File: Open Project", "⌘O"],
-      ["File: New File", ""],
-      ["File: Save", "⌘S"],
-      ["File: Save All", "⌥⌘S"],
-      ["File: Save As", "⇧⌘S"],
-      ["Workspace: Open in VS Code", ""],
-      ["Panel: Show Files", ""],
-      ["Panel: Show Outline", ""],
-      ["Panel: Show Serial Monitor", ""],
-      ["Panel: Toggle Sidebar", "⌘B"],
-      ["Build: Verify", ""],
-      ["Build: Upload", ""],
-      ["Build: Cancel", ""],
-      ["Build: Clean", ""],
-      ["Build: Generate Compilation Database", ""],
-      ["Build: Static Analysis", ""],
-      ["Build: Run Tests", ""],
-      ["Project: Install Dependencies", ""],
-      ["Tools: Check Toolchain", ""],
-      ["C++: Restart Language Server", ""],
-      ["Editor: Format Document", ""],
-      ["Editor: Reload File from Disk", ""],
-      ["Panel: Show Problems", ""],
-      ["Device: Refresh Ports", "⟳"],
-      ["Device: Identify Chip", ""],
-      ["Serial: Toggle Monitor", ""],
-      ["Terminal: Toggle", "⌃`"],
-      ["Terminal: New", ""],
-      ["Terminal: Restart Shell", ""],
-      ["Output: Toggle", ""],
-    ] as Array<[string, string]>,
-    []
+    () =>
+      [
+        ["Workspace: Home", ""],
+        ["Workspace: Settings", ""],
+        ["Panel: Show GitHub", ""],
+        ["Panel: Show Libraries", ""],
+        ["Panel: Show Boards", ""],
+        ["Panel: Show Debug", ""],
+        ["File: New Project", "⇧⌘N"],
+        ["File: New Arduino Uno Project", ""],
+        ["File: New Arduino Nano Project", ""],
+        ["File: Open Project", "⌘O"],
+        ["File: New File", ""],
+        ["File: Save", "⌘S"],
+        ["File: Save All", "⌥⌘S"],
+        ["File: Save As", "⇧⌘S"],
+        ["Workspace: Open in VS Code", ""],
+        ["Panel: Show Files", ""],
+        ["Panel: Show Outline", ""],
+        ["Panel: Show Serial Monitor", ""],
+        ["Panel: Toggle Sidebar", "⌘B"],
+        ["Build: Verify", ""],
+        ["Build: Upload", ""],
+        ["Build: Cancel", ""],
+        ["Build: Clean", ""],
+        ["Build: Generate Compilation Database", ""],
+        ["Build: Static Analysis", ""],
+        ["Build: Run Tests", ""],
+        ["Project: Install Dependencies", ""],
+        ["Tools: Check Toolchain", ""],
+        ["C++: Restart Language Server", ""],
+        ["Editor: Format Document", ""],
+        ["Editor: Reload File from Disk", ""],
+        ["Panel: Show Problems", ""],
+        ["Device: Refresh Ports", "⟳"],
+        ["Device: Identify Chip", ""],
+        ["Serial: Toggle Monitor", ""],
+        ["Terminal: Toggle", "⌃`"],
+        ["Terminal: New", ""],
+        ["Terminal: Restart Shell", ""],
+        ["Output: Toggle", ""],
+      ] as Array<[string, string]>,
+    [],
   );
 
   const openPalette = useCallback(() => {
@@ -881,12 +1114,36 @@ export default function App() {
         label,
         detail: key,
         run: () => actionsRef.current[label]?.(),
-      }))
+      })),
     );
   }, [commands]);
 
   // Keep the action table pointing at the newest closures on every render.
   actionsRef.current = {
+    "Workspace: Home": () => {
+      setPanel("home");
+      setPanelOpen(true);
+    },
+    "Workspace: Settings": () => {
+      setPanel("settings");
+      setPanelOpen(true);
+    },
+    "Panel: Show GitHub": () => {
+      setPanel("git");
+      setPanelOpen(true);
+    },
+    "Panel: Show Libraries": () => {
+      setPanel("libraries");
+      setPanelOpen(true);
+    },
+    "Panel: Show Boards": () => {
+      setPanel("boards");
+      setPanelOpen(true);
+    },
+    "Panel: Show Debug": () => {
+      setPanel("debug");
+      setPanelOpen(true);
+    },
     "File: New Project": () => newProject(),
     "File: New Arduino Uno Project": () => newProject("uno"),
     "File: New Arduino Nano Project": () => newProject("nano"),
@@ -897,38 +1154,74 @@ export default function App() {
     "File: Save As": saveAs,
     "Workspace: Open in VS Code": () =>
       projectDir ? invoke("open_in_vscode", { path: projectDir }) : undefined,
-    "Panel: Show Files": () => { setPanel("files"); setPanelOpen(true); },
-    "Panel: Show Outline": () => { setPanel("outline"); setPanelOpen(true); },
-    "Panel: Show Serial Monitor": () => { setPanel("serial"); setPanelOpen(true); },
+    "Panel: Show Files": () => {
+      setPanel("files");
+      setPanelOpen(true);
+    },
+    "Panel: Show Outline": () => {
+      setPanel("outline");
+      setPanelOpen(true);
+    },
+    "Panel: Show Serial Monitor": () => {
+      setRightTab("serial");
+      setRightOpen(true);
+    },
     "Panel: Toggle Sidebar": () => setPanelOpen((v) => !v),
     "Build: Verify": () => verify(),
     "Build: Upload": () => upload(),
     "Build: Cancel": () => cancelTask(),
     "Build: Clean": () => projectTask(["run", "-t", "clean"], "cleaning"),
     "Build: Generate Compilation Database": async () => {
-      if (await projectTask(["run", "-t", "compiledb"], "indexing") === 0) {
-        try { await invoke("configure_language", {projectDir}); setLanguageRevision(n => n + 1); }
-        catch (e) { log(`C++ configuration: ${e}`); }
+      if ((await projectTask(["run", "-t", "compiledb"], "indexing")) === 0) {
+        try {
+          await invoke("configure_language", { projectDir });
+          setLanguageRevision((n) => n + 1);
+        } catch (e) {
+          log(`C++ configuration: ${e}`);
+        }
       }
     },
     "Build: Static Analysis": () => projectTask(["check"], "analyzing"),
     "Build: Run Tests": () => projectTask(["test"], "testing"),
-    "Project: Install Dependencies": () => projectTask(["pkg", "install"], "installing"),
-    "Tools: Check Toolchain": async () => { revealOutput(); log(JSON.stringify(await invoke("toolchain_status"), null, 2)); },
-    "C++: Restart Language Server": () => setLanguageRevision(n => n + 1),
-    "Editor: Format Document": () => editorRef.current?.getAction("editor.action.formatDocument")?.run(),
-    "Editor: Reload File from Disk": async () => {
-      if (!active || (active.value !== active.saved && !await confirm("Discard edits and reload this file?", {kind:"warning"}))) return;
-      try { const value = await invoke<string>("read_file", {path:active.abs}); setBuffers(bs => bs.map(b => b.abs === active.abs ? {...b, value, saved:value} : b)); }
-      catch (e) { log(`Reload failed: ${e}`); }
+    "Project: Install Dependencies": () =>
+      projectTask(["pkg", "install"], "installing"),
+    "Tools: Check Toolchain": async () => {
+      revealOutput();
+      log(JSON.stringify(await invoke("toolchain_status"), null, 2));
     },
-    "Panel: Show Problems": () => { setPanel("problems"); setPanelOpen(true); },
+    "C++: Restart Language Server": () => setLanguageRevision((n) => n + 1),
+    "Editor: Format Document": () =>
+      editorRef.current?.getAction("editor.action.formatDocument")?.run(),
+    "Editor: Reload File from Disk": async () => {
+      if (
+        !active ||
+        (active.value !== active.saved &&
+          !(await confirm("Discard edits and reload this file?", {
+            kind: "warning",
+          })))
+      )
+        return;
+      try {
+        const value = await invoke<string>("read_file", { path: active.abs });
+        setBuffers((bs) =>
+          bs.map((b) =>
+            b.abs === active.abs ? { ...b, value, saved: value } : b,
+          ),
+        );
+      } catch (e) {
+        log(`Reload failed: ${e}`);
+      }
+    },
+    "Panel: Show Problems": () => {
+      setRightTab("problems");
+      setRightOpen(true);
+    },
     "Device: Refresh Ports": () => scan(),
     "Device: Identify Chip": () => identify(),
     "Serial: Toggle Monitor": () => toggleSerial(),
     "Terminal: Toggle": () => toggleTerminal(),
     "Terminal: New": () => {
-      setBottom("terminal");
+      setTermOpen(true);
       termOpenRef.current = true;
       setTimeout(() => actionsRef.current["Terminal: Restart Shell"]?.(), 0);
     },
@@ -961,7 +1254,7 @@ export default function App() {
           label,
           detail: key,
           run: () => actionsRef.current[label]?.(),
-        }))
+        })),
     );
     setOverlaySel(0);
   }, [overlay, overlayQuery, commands]);
@@ -972,46 +1265,55 @@ export default function App() {
     if (!projectDir) return;
     const q = overlayQuery;
     let stale = false;
-    const t = setTimeout(async () => {
-      try {
-        if (overlay === "finder") {
-          const files = await invoke<string[]>("search_files", { root: projectDir, query: q });
-          if (stale) return;
-          setOverlayItems(
-            files.slice(0, 200).map((f) => ({
-              label: f.split("/").pop() ?? f,
-              detail: f,
-              run: () => openFile(`${projectDir}/${f}`, { pin: true }),
-            }))
-          );
-        } else {
-          if (q.trim().length < 2) {
-            setOverlayItems([]);
-            return;
+    const t = setTimeout(
+      async () => {
+        try {
+          if (overlay === "finder") {
+            const files = await invoke<string[]>("search_files", {
+              root: projectDir,
+              query: q,
+            });
+            if (stale) return;
+            setOverlayItems(
+              files.slice(0, 200).map((f) => ({
+                label: f.split("/").pop() ?? f,
+                detail: f,
+                run: () => openFile(`${projectDir}/${f}`, { pin: true }),
+              })),
+            );
+          } else {
+            if (q.trim().length < 2) {
+              setOverlayItems([]);
+              return;
+            }
+            const hits = await invoke<FileHit[]>("search_text", {
+              root: projectDir,
+              query: q,
+              caseSensitive: false,
+            });
+            if (stale) return;
+            setOverlayItems(
+              hits.slice(0, 300).map((h) => ({
+                label: h.text.trim().slice(0, 120),
+                detail: `${h.path}:${h.line}`,
+                run: async () => {
+                  await openFile(`${projectDir}/${h.path}`, { pin: true });
+                  setTimeout(() => gotoLine(h.line), 60);
+                },
+              })),
+            );
           }
-          const hits = await invoke<FileHit[]>("search_text", {
-            root: projectDir,
-            query: q,
-            caseSensitive: false,
-          });
-          if (stale) return;
-          setOverlayItems(
-            hits.slice(0, 300).map((h) => ({
-              label: h.text.trim().slice(0, 120),
-              detail: `${h.path}:${h.line}`,
-              run: async () => {
-                await openFile(`${projectDir}/${h.path}`, { pin: true });
-                setTimeout(() => gotoLine(h.line), 60);
-              },
-            }))
-          );
+          setOverlaySel(0);
+        } catch (e) {
+          log(`search error: ${e}`);
         }
-        setOverlaySel(0);
-      } catch (e) {
-        log(`search error: ${e}`);
-      }
-    }, overlay === "finder" ? 60 : 220);
-    return () => { stale = true; clearTimeout(t); };
+      },
+      overlay === "finder" ? 60 : 220,
+    );
+    return () => {
+      stale = true;
+      clearTimeout(t);
+    };
   }, [overlay, overlayQuery, projectDir, openFile, log]);
 
   useEffect(() => {
@@ -1025,17 +1327,36 @@ export default function App() {
     "Go to File": openFinder,
     "Find in Project": openSearch,
     "Command Palette": openPalette,
-    "Close Tab": () => { if (activeRef.current) void closeBuffer(activeRef.current); },
-    ...Object.fromEntries(recents.map(path => [`recent:${path}`, () => { void openProjectDir(path); }])),
+    "Close Tab": () => {
+      if (activeRef.current) void closeBuffer(activeRef.current);
+    },
+    ...Object.fromEntries(
+      recents.map((path) => [
+        `recent:${path}`,
+        () => {
+          void openProjectDir(path);
+        },
+      ]),
+    ),
   };
   useEffect(() => {
     if (!isTauri()) return;
     let cancelled = false;
     let dispose: (() => Promise<void>) | undefined;
-    void installNativeMenu(recents, action => nativeActions.current[action]?.(), () => cancelled)
-      .then(cleanup => { dispose = cleanup; if (cancelled) void cleanup(); })
-      .catch(error => log(`Application menu: ${error}`));
-    return () => { cancelled = true; void dispose?.(); };
+    void installNativeMenu(
+      recents,
+      (action) => nativeActions.current[action]?.(),
+      () => cancelled,
+    )
+      .then((cleanup) => {
+        dispose = cleanup;
+        if (cancelled) void cleanup();
+      })
+      .catch((error) => log(`Application menu: ${error}`));
+    return () => {
+      cancelled = true;
+      void dispose?.();
+    };
   }, [recents, log]);
 
   // -- global keybindings, matching Zed's defaults --
@@ -1043,7 +1364,13 @@ export default function App() {
     function onKey(e: KeyboardEvent) {
       const mod = e.metaKey || e.ctrlKey;
       // The native menu owns these accelerators on macOS.
-      if (isTauri() && /Mac/.test(navigator.platform) && mod && ["p", "f", "s", "w", "b", "o", "n"].includes(e.key.toLowerCase())) return;
+      if (
+        isTauri() &&
+        /Mac/.test(navigator.platform) &&
+        mod &&
+        ["p", "f", "s", "w", "b", "o", "n"].includes(e.key.toLowerCase())
+      )
+        return;
       if (mod && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         openPalette();
@@ -1068,8 +1395,9 @@ export default function App() {
         // Zed: ⌃` toggles the terminal panel.
         e.preventDefault();
         actionsRef.current["Terminal: Toggle"]?.();
-      } else if (e.key === "Escape" && overlay) {
+      } else if (e.key === "Escape") {
         setOverlay(null);
+        setPanelOpen(false);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -1082,11 +1410,16 @@ export default function App() {
   /** The backend and this immediate ref both enforce one task at a time.
    * Upload uses a single incremental PlatformIO run; dependency tracking also
    * observes headers and files edited outside the open tabs. */
-  async function projectTask(args: string[], label: string, needsPort = false): Promise<number | null> {
+  async function projectTask(
+    args: string[],
+    label: string,
+    needsPort = false,
+  ): Promise<number | null> {
     if (taskLock.current || !projectDir || (needsPort && !port)) return -1;
     taskLock.current = true;
     cancelRequested.current = false;
-    const restoreMonitor = (needsPort || args[0] === "test") && serialOpenRef.current;
+    const restoreMonitor =
+      (needsPort || args[0] === "test") && serialOpenRef.current;
     const monitorPort = port;
     setBusy(label);
     setProgress(null);
@@ -1094,46 +1427,87 @@ export default function App() {
     revealOutput();
     const id = crypto.randomUUID();
     try {
-      if (!await saveAll()) { log("Task stopped: a file could not be saved."); return -1; }
-      const envs = await invoke<string[]>("project_environments", {projectDir});
+      if (!(await saveAll())) {
+        log("Task stopped: a file could not be saved.");
+        return -1;
+      }
+      const envs = await invoke<string[]>("project_environments", {
+        projectDir,
+      });
       setEnvironments(envs);
-      if (!envs.length) throw new Error("No [env:name] section in platformio.ini");
+      if (!envs.length)
+        throw new Error("No [env:name] section in platformio.ini");
       const selected = envs.includes(environment) ? environment : envs[0];
       setEnvironment(selected);
       localStorage.setItem(`environment:${projectDir}`, selected);
-      if (cancelRequested.current) { setBuildState("cancelled"); log("Task cancelled before starting."); return null; }
+      if (cancelRequested.current) {
+        setBuildState("cancelled");
+        log("Task cancelled before starting.");
+        return null;
+      }
       if (needsPort || args[0] === "test") await stopSerial();
       await eventsReady.current;
-      jobRef.current = {id, root:projectDir};
+      jobRef.current = { id, root: projectDir };
       const done = waitExit();
-      const command = [...args, "-e", selected, ...(needsPort ? ["--upload-port", monitorPort] : [])];
+      const command = [
+        ...args,
+        "-e",
+        selected,
+        ...(needsPort ? ["--upload-port", monitorPort] : []),
+      ];
       log(`\n--- ${label}: pio ${command.join(" ")} ---`);
       try {
-        await invoke("cli_start", {cwd:projectDir, args:command, jobId:id});
+        await invoke("cli_start", {
+          cwd: projectDir,
+          args: command,
+          jobId: id,
+        });
         if (cancelRequested.current) await invoke("cli_cancel");
+      } catch (e) {
+        onCliExit(-1);
+        throw e;
       }
-      catch (e) { onCliExit(-1); throw e; }
       const code = await done;
       setBuildState(code === null ? "cancelled" : code === 0 ? "ok" : "err");
-      log(code === 0 ? `✓ ${label} complete` : `✗ ${label} ${code === null ? "cancelled" : `failed (exit ${code})`}`);
+      log(
+        code === 0
+          ? `✓ ${label} complete`
+          : `✗ ${label} ${code === null ? "cancelled" : `failed (exit ${code})`}`,
+      );
       return code;
-    } catch (e) { log(`${label}: ${e}`); setBuildState("err"); return -1; }
-    finally {
+    } catch (e) {
+      log(`${label}: ${e}`);
+      setBuildState("err");
+      return -1;
+    } finally {
       jobRef.current = null;
       exitResolver.current = null;
       if (restoreMonitor) {
-        try { await invoke("serial_start", {port:monitorPort, baud}); setSerialOpen(true); }
-        catch (e) { log(`Could not resume serial monitor: ${e}`); }
+        try {
+          await invoke("serial_start", { port: monitorPort, baud });
+          setSerialOpen(true);
+        } catch (e) {
+          log(`Could not resume serial monitor: ${e}`);
+        }
       }
       taskLock.current = false;
-      setBusy(null); setProgress(null); setStatus("");
+      setBusy(null);
+      setProgress(null);
+      setStatus("");
     }
   }
 
-  function cancelTask() { cancelRequested.current = true; void invoke("cli_cancel").catch(e => log(`Cancel: ${e}`)); }
+  function cancelTask() {
+    cancelRequested.current = true;
+    void invoke("cli_cancel").catch((e) => log(`Cancel: ${e}`));
+  }
 
-  async function verify() { await projectTask(["run"], "compiling"); }
-  async function upload() { await projectTask(["run", "-t", "upload"], "uploading", true); }
+  async function verify() {
+    await projectTask(["run"], "compiling");
+  }
+  async function upload() {
+    await projectTask(["run", "-t", "upload"], "uploading", true);
+  }
 
   async function identify() {
     if (!port || taskLock.current) return;
@@ -1153,7 +1527,13 @@ export default function App() {
     } catch (e) {
       log(`identify error: ${e}`);
     } finally {
-      if (restore) { try { await invoke("serial_start", {port, baud}); } catch (e) { log(`Serial resume: ${e}`); } }
+      if (restore) {
+        try {
+          await invoke("serial_start", { port, baud });
+        } catch (e) {
+          log(`Serial resume: ${e}`);
+        }
+      }
       taskLock.current = false;
       setBusy(null);
       setStatus("");
@@ -1186,142 +1566,6 @@ export default function App() {
 
   // ============================================================== render tree ===
 
-  function GitPanel({projectDir}: {projectDir: string}) {
-    const [status, setStatus] = useState<any>(null);
-    const [log, setLog] = useState<any>(null);
-    const [branches, setBranches] = useState<any>(null);
-    const [remotes, setRemotes] = useState<any>(null);
-    const [auth, setAuth] = useState<any>(null);
-    const [msg, setMsg] = useState("");
-    const [repoName, setRepoName] = useState("");
-    const [privateRepo, setPrivateRepo] = useState(true);
-    const [remoteUrl, setRemoteUrl] = useState("");
-    const [remoteName, setRemoteName] = useState("origin");
-    const [branchName, setBranchName] = useState("");
-    async function refresh() {
-      if (!projectDir) return;
-      try { const s = await invoke("git_status", {projectDir}); setStatus(s); } catch {}
-      try { const l = await invoke("git_log", {projectDir, limit: 30}); setLog(l); } catch {}
-      try { const b = await invoke("git_branches", {projectDir}); setBranches(b); } catch {}
-      try { const r = await invoke("git_remote_list", {projectDir}); setRemotes(r); } catch {}
-    }
-    async function checkAuth() {
-      try { const a = await invoke("gh_auth_status"); setAuth(a); } catch(e:any){ setAuth({error: e.toString()}); }
-    }
-    useEffect(() => { refresh(); }, [projectDir]);
-    async function addAll() { if (!projectDir) return; try { await invoke("git_add", {projectDir, paths: ["."]}); await refresh(); } catch {} }
-    async function commit() { if (!projectDir || !msg.trim()) return; try { await invoke("git_commit", {projectDir, message: msg}); setMsg(""); await refresh(); } catch {} }
-    async function init() { if (!projectDir) return; try { await invoke("git_init", {projectDir}); await refresh(); } catch {} }
-    async function push() { if (!projectDir) return; try { const r:any = await invoke("git_push", {projectDir}); alert(r.output || r.error || JSON.stringify(r)); await refresh(); } catch(e:any){ alert(e.toString()); } }
-    async function pull() { if (!projectDir) return; try { const r:any = await invoke("git_pull", {projectDir}); alert(r.output || r.error || JSON.stringify(r)); await refresh(); } catch(e:any){ alert(e.toString()); } }
-    async function addRemote() { if (!projectDir || !remoteUrl.trim()) return; try { const r:any = await invoke("git_remote_add", {projectDir, name: remoteName, url: remoteUrl}); alert(r.output || r.error || JSON.stringify(r)); setRemoteUrl(""); await refresh(); } catch(e:any){ alert(e.toString()); } }
-    async function publishToGitHub() { if (!projectDir || !repoName.trim()) return; try { const r:any = await invoke("gh_repo_create", {projectDir, name: repoName, private: privateRepo}); alert(r.output || r.error || JSON.stringify(r)); await refresh(); } catch(e:any){ alert(e.toString()); } }
-    async function createRemoteOnly() { if (!projectDir || !repoName.trim()) return; try { const r:any = await invoke("gh_repo_create_remote", {projectDir, name: repoName, private: privateRepo}); alert(r.output || r.error || JSON.stringify(r)); await refresh(); } catch(e:any){ alert(e.toString()); } }
-    async function checkout() { if (!projectDir || !branchName.trim()) return; try { const r:any = await invoke("git_checkout", {projectDir, branch: branchName, create: false}); alert(r.output || r.error || JSON.stringify(r)); setBranchName(""); await refresh(); } catch(e:any){ alert(e.toString()); } }
-    return (
-      <div style={{padding:8, fontSize:12, overflow:"auto", height:"100%"}}>
-        <div style={{display:"flex", gap:4, marginBottom:8, flexWrap:"wrap"}}>
-          <button onClick={refresh}>Refresh</button>
-          <button onClick={addAll}>Stage All</button>
-          <button onClick={init}>Init</button>
-          <button onClick={push}>Push</button>
-          <button onClick={pull}>Pull</button>
-        </div>
-        <div style={{color:"var(--text-hi)", marginBottom:4}}>Commit</div>
-        <input value={msg} onChange={e=>setMsg(e.target.value)} placeholder="Commit message" style={{width:"100%", marginBottom:4}} />
-        <button onClick={commit} disabled={!msg.trim()}>Commit</button>
-        <div style={{marginTop:12, color:"var(--text-hi)"}}>GitHub</div>
-        <div style={{display:"flex", gap:4, alignItems:"center", marginBottom:4}}>
-          <button onClick={checkAuth}>Check gh auth</button>
-          <span style={{fontSize:11, color:"var(--muted)"}}>{auth?.output ? "Logged in" : auth?.error ? "Not logged in" : "Not checked"}</span>
-        </div>
-        <div style={{display:"flex", gap:4, marginBottom:4}}>
-          <input value={repoName} onChange={e=>setRepoName(e.target.value)} placeholder="Repository name" style={{flex:1}} />
-          <label style={{display:"flex", alignItems:"center", gap:2}}><input type="checkbox" checked={privateRepo} onChange={e=>setPrivateRepo(e.target.checked)} />Private</label>
-        </div>
-        <div style={{display:"flex", gap:4, flexWrap:"wrap"}}>
-          <button onClick={publishToGitHub}>Publish to GitHub (create + push)</button>
-          <button onClick={createRemoteOnly}>Create repo + add remote</button>
-        </div>
-        <div style={{marginTop:12, color:"var(--text-hi)"}}>Remotes</div>
-        <pre style={{whiteSpace:"pre-wrap", fontSize:11}}>{remotes?.output || remotes?.error || "—"}</pre>
-        <div style={{display:"flex", gap:4, marginBottom:4}}>
-          <input value={remoteName} onChange={e=>setRemoteName(e.target.value)} placeholder="origin" style={{width:80}} />
-          <input value={remoteUrl} onChange={e=>setRemoteUrl(e.target.value)} placeholder="https://github.com/user/repo.git" style={{flex:1}} />
-          <button onClick={addRemote}>Add Remote</button>
-        </div>
-        <div style={{marginTop:12, color:"var(--text-hi)"}}>Branches</div>
-        <div style={{display:"flex", gap:4, marginBottom:4}}>
-          <input value={branchName} onChange={e=>setBranchName(e.target.value)} placeholder="branch name" style={{flex:1}} />
-          <button onClick={checkout}>Checkout</button>
-        </div>
-        <pre style={{whiteSpace:"pre-wrap", fontSize:11}}>{branches?.output || branches?.error || "—"}</pre>
-        <div style={{marginTop:12, color:"var(--text-hi)"}}>Status</div>
-        <pre style={{whiteSpace:"pre-wrap", fontSize:11}}>{status?.output || status?.error || "—"}</pre>
-        <div style={{marginTop:12, color:"var(--text-hi)"}}>Log</div>
-        <pre style={{whiteSpace:"pre-wrap", fontSize:11}}>{log?.output || log?.error || "—"}</pre>
-      </div>
-    );
-  }
-
-  function DebugPanel({projectDir}: {projectDir: string}) {
-    const [state, setState] = useState<any>(null);
-    async function start() {
-      if (!projectDir) return;
-      try { const r = await invoke("debug_start", {projectDir}); setState(r); } catch(e:any){ setState({error: e.toString()}); }
-    }
-    async function stop() {
-      try { const r = await invoke("debug_stop"); setState(r); } catch(e:any){ setState({error: e.toString()}); }
-    }
-    return (
-      <div style={{padding:8, fontSize:12, overflow:"auto", height:"100%"}}>
-        <div style={{display:"flex", gap:4, marginBottom:8}}>
-          <button onClick={start}>Start (OpenOCD)</button>
-          <button onClick={stop}>Stop</button>
-        </div>
-        <div style={{color:"var(--muted)", fontSize:11}}>ESP32 debugging requires a JTAG probe. Starts OpenOCD with a basic config.</div>
-        <pre style={{whiteSpace:"pre-wrap", fontSize:11, marginTop:8}}>{state ? JSON.stringify(state, null, 2) : "—"}</pre>
-      </div>
-    );
-  }
-
-  function LibrariesPanel({projectDir}: {projectDir: string}) {
-    const [q, setQ] = useState("");
-    const [res, setRes] = useState<any>(null);
-    async function search() {
-      try { const r = await invoke("pio_library_search", {query: q}); setRes(r); } catch(e:any){ setRes({error: e.toString()}); }
-    }
-    async function install(lib: string) {
-      if (!projectDir) return;
-      try { const r = await invoke("pio_library_install", {projectDir, lib}); setRes(r); } catch(e:any){ setRes({error: e.toString()}); }
-    }
-    return (
-      <div style={{padding:8, fontSize:12, overflow:"auto", height:"100%"}}>
-        <div style={{display:"flex", gap:4, marginBottom:8}}>
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search libraries..." style={{flex:1}} />
-          <button onClick={search}>Search</button>
-        </div>
-        <div style={{color:"var(--muted)", fontSize:11, marginBottom:4}}>Search results (JSON from PlatformIO)</div>
-        <pre style={{whiteSpace:"pre-wrap", fontSize:10, maxHeight:200, overflow:"auto"}}>{res?.output || res?.error || "—"}</pre>
-        <input placeholder="Library name to install" style={{width:"100%", marginTop:8}} onKeyDown={e=>{ if(e.key==="Enter"){ const v=(e.target as HTMLInputElement).value; if(v){ install(v); (e.target as HTMLInputElement).value=""; }}}} />
-      </div>
-    );
-  }
-
-  function BoardsPanel() {
-    const [res, setRes] = useState<any>(null);
-    async function list() {
-      try { const r = await invoke("pio_boards_list"); setRes(r); } catch(e:any){ setRes({error: e.toString()}); }
-    }
-    useEffect(() => { list(); }, []);
-    return (
-      <div style={{padding:8, fontSize:12, overflow:"auto", height:"100%"}}>
-        <button onClick={list}>Refresh</button>
-        <pre style={{whiteSpace:"pre-wrap", fontSize:10, marginTop:8}}>{res?.output || res?.error || "—"}</pre>
-      </div>
-    );
-  }
-
   function renderNodes(nodes: FileNode[], depth: number) {
     return nodes.map((n) => {
       const kids = expanded[n.path];
@@ -1334,12 +1578,16 @@ export default function App() {
             className={`tree-row${isActive ? " selected" : ""}${n.isDir ? " dir" : ""}`}
             style={{ paddingLeft: 8 + depth * 12 }}
             title={n.path}
-            onClick={() => (n.isDir ? toggleDir(n) : openFile(n.path, { preview: true }))}
+            onClick={() =>
+              n.isDir ? toggleDir(n) : openFile(n.path, { preview: true })
+            }
             onDoubleClick={() => !n.isDir && openFile(n.path, { pin: true })}
           >
             <span className="twisty">{n.isDir ? (kids ? "▾" : "▸") : ""}</span>
-            <span className="ico">{fileIcon(n.name, n.isDir)}</span>
-            <span className={`nm${activeBuf?.preview ? " preview" : ""}`}>{n.name}</span>
+            <span className="ico"><Icon name={n.isDir ? "folder" : "file"} width={14} height={14} /></span>
+            <span className={`nm${activeBuf?.preview ? " preview" : ""}`}>
+              {n.name}
+            </span>
             {dirty && <span className="dirty">●</span>}
           </div>
           {n.isDir && kids && renderNodes(kids, depth + 1)}
@@ -1348,257 +1596,357 @@ export default function App() {
     });
   }
 
-  const panelTitle =
-    panel === "files" ? "Project" : panel === "outline" ? "Outline" : panel === "problems" ? "Problems" : panel === "serial" ? "Serial" : panel === "git" ? "Git" : panel === "debug" ? "Debug" : panel === "libraries" ? "Libraries" : "Boards";
+  const panelTitle = {
+    home: "Workspace",
+    files: "Project files",
+    outline: "Outline",
+    git: "GitHub",
+    debug: "Debug",
+    libraries: "Libraries",
+    boards: "Boards",
+    settings: "Settings",
+  }[panel];
+  const selectPanel = (next: typeof panel) => {
+    setPanel(next);
+    setPanelOpen((current) => (panel === next ? !current : true));
+  };
+  const showRight = (next: typeof rightTab) => {
+    setRightTab(next);
+    setRightOpen(true);
+  };
+  const activateDock = (id: string) => {
+    if (id === "terminal") toggleTerminal();
+    else if (id === "serial") {
+      setRightTab("serial");
+      setRightOpen((open) => (rightTab === "serial" ? !open : true));
+    } else selectPanel(id as typeof panel);
+  };
 
   return (
-    <div className="wrap" onMouseMove={(e) => e.stopPropagation()}>
-      {/* ------------------------------------------------------------ title bar */}
-      <div className="titlebar">
-        <span className="brand">openplatform-ide</span>
-        <span className="sub">{projectDir ? baseName(projectDir) : "no project"}</span>
-
-        <div className="actions">
-          <button onClick={scan} title="Refresh serial ports">⟳</button>
-          <select aria-label="Build environment" value={environment} disabled={!!busy} onChange={e => { setEnvironment(e.target.value); localStorage.setItem(`environment:${projectDir}`, e.target.value); }}>
-            {environments.map(env => <option key={env} value={env}>{env}</option>)}
-          </select>
-          <select aria-label="Serial port" disabled={!!busy || serialOpen} value={port} onChange={(e) => setPort(e.target.value)}>
-            <option value="">— port —</option>
-            {ports.map((p) => (
-              <option key={p.address} value={p.address}>
-                {p.address}
-                {p.isUsb ? ` [${p.vid}:${p.pid}${p.product ? " " + p.product : ""}]` : ""}
-              </option>
-            ))}
-          </select>
-          <button onClick={identify} disabled={!port || !!busy}>
-            {busy === "identify chip" ? "probing…" : "Identify"}
-          </button>
-          <button onClick={verify} disabled={!!busy || !projectDir}>
-            {busy === "compiling" ? "compiling…" : "✓ Verify"}
-          </button>
-          <button onClick={upload} disabled={!port || !!busy || !projectDir}>
-            {busy === "uploading" || busy === "compiling" ? "working…" : "↑ Upload"}
-          </button>
-          {busy && busy !== "identify chip" && <button onClick={cancelTask} title="Cancel task">■ Stop</button>}
-          <button onClick={openPalette} title="Command palette">⌘</button>
-        </div>
-      </div>
-
-      {(busy || progress !== null) && (
-        <div className="progress-wrap">
-          <div className="progress">
-            <div
-              className={`bar${progress === null ? " indeterminate" : ""}`}
-              style={progress !== null ? { width: `${progress}%` } : undefined}
-            />
-          </div>
-          <span className="progress-label">
-            {busy ?? "working"}
-            {progress !== null ? ` — ${progress}%` : ""}
-            {status ? ` · ${status}` : ""}
+    <div
+      style={
+        {
+          "--bottom-height": bottomExpanded ? "42%" : "23%",
+        } as React.CSSProperties
+      }
+      className={`wrap ${isTauri() && /Mac/.test(navigator.platform) ? "native-mac" : ""}`}
+    >
+      <header className="titlebar" data-tauri-drag-region>
+        <span className="brand" data-tauri-drag-region>
+          OpenPlatform
+        </span>
+        <div className="project-identity" data-tauri-drag-region>
+          <Icon name="branch" />
+          <span data-tauri-drag-region>
+            {projectDir ? baseName(projectDir) : "Your workspace"}
           </span>
+          {branch && (
+            <>
+              <i />
+              <button onClick={() => selectPanel("git")}>
+                {branch}
+                <Icon name="chevron" />
+              </button>
+            </>
+          )}
         </div>
-      )}
-
-      {chip && (
-        <div className={`chip ${chip.success ? "ok" : "bad"}`}>
-          {chip.success
-            ? `✓ ${chip.summary} on ${chip.port}  (esptool ${chip.command})`
-            : `✗ chip identify failed on ${chip.port}: ${chip.output
-                .slice(0, 240)
-                .replace(/\n/g, " ")}`}
+        <div className="title-actions">
+          <button className="quick-search" onClick={openFinder}>
+            <Icon name="search" />
+            <span>Go to file…</span>
+            <kbd>⌘P</kbd>
+          </button>
+          <button
+            className="icon-button"
+            title="Command palette (⇧⌘P)"
+            aria-label="Command palette"
+            onClick={openPalette}
+          >
+            <Icon name="command" />
+          </button>
+          <button
+            className="icon-button"
+            title="Find in project (⇧⌘F)"
+            aria-label="Find in project"
+            onClick={openSearch}
+          >
+            <Icon name="search" />
+          </button>
         </div>
-      )}
+      </header>
 
-      {/* ---------------------------------------------------------- workspace */}
-      <div className="workspace">
-        <div className="activity-bar">
-          <button
-            className={panelOpen && panel === "files" ? "active" : ""}
-            title="Project files"
-            onClick={() => { setPanel("files"); setPanelOpen(true); }}
-          >
-            ▤
-          </button>
-          <button
-            className={panelOpen && panel === "outline" ? "active" : ""}
-            title="Outline"
-            onClick={() => { setPanel("outline"); setPanelOpen(true); }}
-          >
-            ≡
-          </button>
-          <button
-            className={panelOpen && panel === "serial" ? "active" : ""}
-            title="Serial monitor"
-            onClick={() => { setPanel("serial"); setPanelOpen(true); }}
-          >
-            ⌁
-          </button>
-          <button title={`Problems (${diagnostics.length})`} onClick={() => { setPanel("problems"); setPanelOpen(true); }}>!</button>
-          <button className={panelOpen && panel === "git" ? "active" : ""} title="Git" onClick={() => { setPanel("git"); setPanelOpen(true); }}>⎇</button>
-          <button className={panelOpen && panel === "debug" ? "active" : ""} title="Debug" onClick={() => { setPanel("debug"); setPanelOpen(true); }}>🐞</button>
-          <button className={panelOpen && panel === "libraries" ? "active" : ""} title="Libraries" onClick={() => { setPanel("libraries"); setPanelOpen(true); }}>📚</button>
-          <button className={panelOpen && panel === "boards" ? "active" : ""} title="Boards" onClick={() => { setPanel("boards"); setPanelOpen(true); }}>▦</button>
-          <span className="rail-spacer" />
-          <button
-            className={outOpen ? "active" : ""}
-            title="Build & upload output"
-            onClick={toggleOutput}
-          >
-            ⧉
-          </button>
-          <button
-            className={termOpen ? "active" : ""}
-            title="Terminal (⌃`)"
-            onClick={toggleTerminal}
-          >
-            &gt;_
-          </button>
-          <button title="Command palette (⇧⌘P)" onClick={openPalette}>⌘</button>
-        </div>
-
-        {panelOpen && (
-          <>
-            <div className="dock" style={{ flex: `0 0 ${panelWidth}px`, width: panelWidth }}>
-              <div className="dock-head">
-                <span>{panelTitle}</span>
-                <span className="spacer" />
-                {panel === "files" && (
-                  <>
-                    <button title="New file" onClick={newFile}>＋</button>
-                    <button title="Refresh" onClick={() => refreshTree(projectDir)}>⟳</button>
-                  </>
-                )}
-                {panel === "serial" && (
-                  <button title="Clear" onClick={() => setSerialText("")}>clear</button>
-                )}
-                <button title="Hide panel (⌘B)" onClick={() => setPanelOpen(false)}>✕</button>
-              </div>
-
-              <div className="dock-body">
-                {panel === "files" &&
-                  (treeRoot.length ? (
-                    <div className="tree">{renderNodes(treeRoot, 0)}</div>
-                  ) : (
-                    <div className="tree-empty">No project open.</div>
-                  ))}
-
-                {panel === "outline" &&
-                  (outline.length ? (
-                    outline.map((s, i) => (
-                      <div className="outline-row" key={`${s.name}-${i}`} onClick={() => gotoLine(s.line)}>
-                        <span className="kind">{s.kind}</span>
-                        <span className="nm">{s.name}</span>
-                        <span className="ln">{s.line}</span>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="tree-empty">
-                      {active ? "No symbols found." : "No file open."}
-                    </div>
-                  ))}
-
-                {panel === "problems" && (diagnostics.length ? diagnostics.map((d, i) => (
-                  <div className="outline-row" key={i} title={d.message} onClick={async () => { await openFile(d.path, {pin:true}); setTimeout(() => gotoLine(d.line), 80); }}>
-                    <span className="kind">{d.severity}</span><span className="nm">{baseName(d.path)}:{d.line} — {d.message}</span>
-                  </div>
-                )) : <div className="tree-empty">No compiler diagnostics. Verify to check the project.</div>)}
-                {panel === "git" && <GitPanel projectDir={projectDir} />}
-                {panel === "debug" && <DebugPanel projectDir={projectDir} />}
-                {panel === "libraries" && <LibrariesPanel projectDir={projectDir} />}
-                {panel === "boards" && <BoardsPanel />}
-                {panel === "serial" && (
-                  <div className="serial-panel">
-                    <div className="serial-tools">
-                      <select
-                        value={baud}
-                        onChange={(e) => setBaud(Number(e.target.value))}
-                        disabled={serialOpen}
-                      >
-                        {[9600, 19200, 57600, 115200, 230400].map((b) => (
-                          <option key={b} value={b}>{b}</option>
-                        ))}
-                      </select>
-                      <button onClick={toggleSerial} disabled={!serialOpen && (!port || !!busy)}>
-                        {serialOpen ? "■ Stop" : "▷ Start"}
-                      </button>
-                      <span style={{ color: "var(--muted)", fontSize: 11 }}>
-                        {serialOpen ? `● ${port}` : "○ stopped"}
-                      </span>
-                    </div>
-                    <form onSubmit={async e => { e.preventDefault(); try { await invoke("serial_write", {data:serialInput + lineEnding}); setSerialInput(""); } catch (error) { log(`Serial send: ${error}`); } }}>
-                      <input aria-label="Serial message" placeholder="Send to board…" value={serialInput} onChange={e => setSerialInput(e.target.value)} disabled={!serialOpen} />
-                      <select aria-label="Line ending" value={lineEnding} onChange={e => setLineEnding(e.target.value)}><option value="">None</option><option value={"\n"}>LF</option><option value={"\r\n"}>CRLF</option></select>
-                      <button disabled={!serialOpen} type="submit">Send</button>
-                    </form>
-                    <pre ref={serRef} className="serial">{serialText || "—"}</pre>
-                  </div>
-                )}
-              </div>
-            </div>
-            <div
-              className="dock-splitter"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                const startX = e.clientX;
-                const startW = panelWidth;
-                const move = (ev: MouseEvent) => {
-                  const w = Math.max(160, Math.min(520, startW + ev.clientX - startX));
-                  setPanelWidth(w);
-                };
-                const up = () => {
-                  window.removeEventListener("mousemove", move);
-                  window.removeEventListener("mouseup", up);
-                };
-                window.addEventListener("mousemove", move);
-                window.addEventListener("mouseup", up);
-              }}
-            />
-          </>
-        )}
-
-        {/* ------------------------------------------------------------ pane */}
-        <div className="pane">
-          <div className="tabbar">
-            {buffers.map((b) => (
+      <main className="workspace">
+        <nav className="activity-bar" aria-label="Workspace dock">
+          {dockItems
+            .filter((item) => preferences.dock.includes(item.id))
+            .map((item) => (
               <button
-                key={b.path}
-                className={`tab${b.path === activePath ? " active" : ""}${b.preview ? " preview" : ""}`}
-                title={b.path}
-                onClick={() => setActivePath(b.path)}
-                onDoubleClick={() =>
-                  setBuffers((bs) => bs.map((x) => (x.path === b.path ? { ...x, preview: false } : x)))
-                }
+                key={item.id}
+                className={`dock-icon ${item.id === "terminal" ? (termOpen ? "active" : "") : item.id === "serial" ? (rightOpen && rightTab === "serial" ? "active" : "") : panelOpen && panel === item.id ? "active" : ""}`}
+                aria-label={item.label}
+                data-tooltip={item.label}
+                onClick={() => activateDock(item.id)}
               >
-                <span className="tab-name">{baseName(b.path)}</span>
-                {b.value !== b.saved && <span className="dirty">●</span>}
-                <span
-                  className="close"
-                  onClick={(e) => { e.stopPropagation(); closeBuffer(b.path); }}
-                >
-                  ×
-                </span>
+                <Icon name={item.icon} />
+                {((item.id === "serial" && serialOpen) ||
+                  (item.id === "terminal" && termOpen)) && (
+                  <span className="activity-dot" />
+                )}
               </button>
             ))}
+          <div className="dock-divider" />
+          <button
+            className="dock-icon"
+            aria-label="More tools"
+            data-tooltip="More tools · ⇧⌘P"
+            onClick={openPalette}
+          >
+            <Icon name="more" />
+          </button>
+          <button
+            className={`dock-icon ${panelOpen && panel === "settings" ? "active" : ""}`}
+            aria-label="Settings"
+            data-tooltip="Settings"
+            onClick={() => selectPanel("settings")}
+          >
+            <Icon name="settings" />
+          </button>
+        </nav>
+
+        <section
+          className={`workspace-main ${!termOpen && !rightOpen ? "no-bottom" : ""}`}
+        >
+          <div className="tabs-region">
+            <div className="tabbar" role="tablist" aria-label="Open files">
+              {buffers.map((b) => (
+                <div
+                  key={b.path}
+                  role="tab"
+                  aria-selected={b.path === activePath}
+                  tabIndex={0}
+                  className={`tab${b.path === activePath ? " active" : ""}${b.preview ? " preview" : ""}`}
+                  title={b.path}
+                  onClick={() => setActivePath(b.path)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setActivePath(b.path);
+                    }
+                  }}
+                  onDoubleClick={() =>
+                    setBuffers((bs) =>
+                      bs.map((x) =>
+                        x.path === b.path ? { ...x, preview: false } : x,
+                      ),
+                    )
+                  }
+                >
+                  <span className="tab-name">{baseName(b.path)}</span>
+                  {b.value !== b.saved && (
+                    <span className="dirty" aria-label="Unsaved changes" />
+                  )}
+                  <button
+                    className="tab-close"
+                    aria-label={`Close ${baseName(b.path)}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void closeBuffer(b.path);
+                    }}
+                  >
+                    <Icon name="close" />
+                  </button>
+                </div>
+              ))}
+              {!buffers.length && (
+                <span className="tabs-placeholder">No open files</span>
+              )}
+              <button
+                className="icon-button tab-add"
+                aria-label="Open a file"
+                title="Go to file (⌘P)"
+                onClick={openFinder}
+              >
+                <Icon name="plus" />
+              </button>
+            </div>
           </div>
 
-          {active ? (
-            <>
+          <section className="editor-window surface" aria-label="Code editor">
+            <div className="editor-toolbar">
               <div className="breadcrumbs">
-                {active.path.split("/").map((part, i, all) => (
-                  <span key={i}>
-                    <span className="crumb">{part}</span>
-                    {i < all.length - 1 && <span className="sep"> › </span>}
-                  </span>
-                ))}
+                <Icon name="file" />
+                <button
+                  title="Project files"
+                  onClick={() => selectPanel("files")}
+                >
+                  {projectDir ? baseName(projectDir) : "Open a project"}
+                </button>
+                {active &&
+                  active.path.split("/").map((part, i) => (
+                    <span className="breadcrumb-part" key={`${i}-${part}`}>
+                      <span className="sep">/</span>
+                      {part}
+                    </span>
+                  ))}
+                <button
+                  className="icon-button save-button"
+                  title="Save (⌘S)"
+                  aria-label="Save file"
+                  disabled={!active}
+                  onClick={() => void saveActive()}
+                >
+                  <Icon name="save" />
+                </button>
               </div>
+              <div className="build-actions">
+                <select
+                  aria-label="Build environment"
+                  value={environment}
+                  disabled={!!busy || !environments.length}
+                  onChange={(e) => {
+                    setEnvironment(e.target.value);
+                    localStorage.setItem(
+                      `environment:${projectDir}`,
+                      e.target.value,
+                    );
+                  }}
+                >
+                  {!environments.length && (
+                    <option value="">Environment</option>
+                  )}
+                  {environments.map((env) => (
+                    <option key={env}>{env}</option>
+                  ))}
+                </select>
+                <select
+                  className="port-select"
+                  title={port || "Select a serial port"}
+                  aria-label="Serial port"
+                  value={port}
+                  disabled={!!busy || serialOpen}
+                  onChange={(e) => setPort(e.target.value)}
+                >
+                  <option value="">Select port</option>
+                  {ports.map((p) => (
+                    <option key={p.address} value={p.address}>
+                      {p.address.replace(/^\/dev\/cu\./, "")}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="icon-button"
+                  title="Refresh ports"
+                  aria-label="Refresh ports"
+                  onClick={scan}
+                >
+                  <Icon name="refresh" />
+                </button>
+                <button
+                  className="identify-button"
+                  onClick={identify}
+                  disabled={!port || !!busy}
+                >
+                  Identify
+                </button>
+                <button onClick={verify} disabled={!!busy || !projectDir}>
+                  <Icon name="check" />
+                  <span>Verify</span>
+                </button>
+                <button
+                  className="primary"
+                  onClick={upload}
+                  disabled={!port || !!busy || !projectDir}
+                >
+                  <Icon name="upload" />
+                  <span>Upload</span>
+                </button>
+                {busy && (
+                  <button title="Cancel active task" onClick={cancelTask}>
+                    <Icon name="stop" />
+                    Stop
+                  </button>
+                )}
+                <button
+                  className="icon-button"
+                  title="Build tools"
+                  aria-label="Build tools"
+                  onClick={openPalette}
+                >
+                  <Icon name="more" />
+                </button>
+              </div>
+            </div>
+            {busy && (
+              <div className="progress-wrap">
+                <div className="progress">
+                  <div
+                    className={`bar ${progress === null ? "indeterminate" : ""}`}
+                    style={
+                      progress !== null ? { width: `${progress}%` } : undefined
+                    }
+                  />
+                </div>
+                <span>
+                  {busy}
+                  {progress !== null ? ` · ${progress}%` : ""}
+                </span>
+              </div>
+            )}
+            {chip && (
+              <div className={`chip-result ${chip.success ? "ok" : "err"}`}>
+                <Icon name="chip" />
+                <span>
+                  {chip.success
+                    ? chip.summary
+                    : "Could not identify chip. See Build Output for details."}
+                </span>
+                <button
+                  className="icon-button"
+                  aria-label="Dismiss chip details"
+                  onClick={() => setChip(null)}
+                >
+                  <Icon name="close" />
+                </button>
+              </div>
+            )}
+            {active ? (
               <div className="editor-host">
                 <Editor
                   height="100%"
                   language={activeLang}
-                  theme="vs-dark"
+                  theme="openplatform-light"
+                  beforeMount={(m) =>
+                    m.editor.defineTheme("openplatform-light", {
+                      base: "vs",
+                      inherit: true,
+                      rules: [
+                        { token: "comment", foreground: "8493A8" },
+                        { token: "keyword", foreground: "8952C7" },
+                        { token: "number", foreground: "008C86" },
+                        { token: "string", foreground: "AC4A30" },
+                        { token: "type", foreground: "296FA8" },
+                      ],
+                      colors: {
+                        "editor.background": "#FFFFFF",
+                        "editor.foreground": "#26364D",
+                        "editorLineNumber.foreground": "#94A1B3",
+                        "editorLineNumber.activeForeground": "#008A88",
+                        "editor.lineHighlightBackground": "#EAF8F6",
+                        "editor.lineHighlightBorder": "#00000000",
+                        "editor.selectionBackground": "#CFEAE8",
+                        "editorCursor.foreground": "#008B87",
+                        "editorIndentGuide.background1": "#EDF0F3",
+                        "editorIndentGuide.activeBackground1": "#C8D5DB",
+                        "editorWidget.background": "#FFFFFF",
+                        "editorWidget.border": "#DBE2E9",
+                        "editorSuggestWidget.selectedBackground": "#E3F4F2",
+                        "editorStickyScroll.background": "#FFFFFF",
+                        "minimap.background": "#FFFFFF",
+                        "scrollbarSlider.background": "#A4B3C044",
+                        "scrollbarSlider.hoverBackground": "#A4B3C077",
+                      },
+                    })
+                  }
                   value={activeValue}
                   path={monaco.Uri.file(active.abs).toString()}
                   keepCurrentModel
@@ -1606,114 +1954,637 @@ export default function App() {
                   onMount={(ed) => {
                     editorRef.current = ed;
                     ed.onDidChangeCursorPosition((e) =>
-                      setCursor({ line: e.position.lineNumber, col: e.position.column })
+                      setCursor({
+                        line: e.position.lineNumber,
+                        col: e.position.column,
+                      }),
                     );
                   }}
                   options={{
-                    fontSize: 13,
-                    fontFamily:
-                      'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
-                    minimap: { enabled: false },
-                    wordWrap: "on",
+                    fontSize: preferences.fontSize,
+                    lineHeight: Math.round(preferences.fontSize * 1.55),
+                    fontFamily: '"SF Mono", SFMono-Regular, Menlo, monospace',
+                    minimap: {
+                      enabled: preferences.minimap,
+                      renderCharacters: false,
+                      maxColumn: 90,
+                      scale: 1,
+                    },
+                    wordWrap: preferences.wordWrap ? "on" : "off",
                     automaticLayout: true,
                     renderLineHighlight: "all",
                     scrollBeyondLastLine: false,
                     fontLigatures: true,
                     smoothScrolling: true,
                     cursorBlinking: "smooth",
-                    guides: { indentation: true, bracketPairs: true },
-                    bracketPairColorization: { enabled: true },
+                    guides: { indentation: true, bracketPairs: false },
+                    bracketPairColorization: { enabled: false },
                     stickyScroll: { enabled: true },
-                    inlayHints: { enabled: "on" },
                     renderWhitespace: "selection",
-                    padding: { top: 8 },
+                    padding: { top: 8, bottom: 12 },
+                    lineNumbersMinChars: 3,
+                    glyphMargin: false,
+                    folding: true,
+                    overviewRulerBorder: false,
+                    scrollbar: {
+                      verticalScrollbarSize: 9,
+                      horizontalScrollbarSize: 9,
+                    },
                   }}
                 />
               </div>
-            </>
-          ) : (
-            <div className="pane-empty">
-              <div style={{ fontSize: 15, color: "var(--text-hi)" }}>openplatform-ide</div>
-              <div>No file open — pick one from the Project panel.</div>
-              <div>
-                <kbd>⌘P</kbd> go to file &nbsp; <kbd>⇧⌘P</kbd> commands &nbsp;{" "}
-                <kbd>⇧⌘F</kbd> find in project
+            ) : (
+              <div className="welcome">
+                <div className="welcome-symbol">
+                  <Icon name="terminal" />
+                </div>
+                <span className="eyebrow">OPENPLATFORM</span>
+                <h1>
+                  A little space.
+                  <br />
+                  For your next big idea.
+                </h1>
+                <p>Open a project and make something work.</p>
+                <div className="button-row">
+                  <button className="primary" onClick={openProject}>
+                    <Icon name="folder" />
+                    Open project
+                  </button>
+                  <button onClick={() => newProject()}>
+                    <Icon name="plus" />
+                    New project
+                  </button>
+                </div>
+                <button
+                  className="text-button"
+                  onClick={() => selectPanel("home")}
+                >
+                  Recent projects <span>→</span>
+                </button>
               </div>
-            </div>
-          )}
-        </div>
-      </div>
+            )}
+          </section>
 
-      {/* ------------------------------------------------- bottom dock: terminal */}
-      {/*
-        Kept mounted at all times and hidden with CSS when another bottom view
-        is active. Unmounting it would orphan xterm's DOM node: `term.element`
-        stays set, so a later `term.open()` is skipped and the freshly mounted
-        host div renders empty — the "blank terminal after toggling" bug.
-      */}
-      <div
-        className={`bottom-dock terminal-dock${termOpen ? "" : " hidden"}`}
-        aria-hidden={!termOpen}
-      >
-        <div className="dock-head">
-          <span>Terminal</span>
-          {termCwd && <span className="term-cwd" title={termCwd}>{`'${termCwd}'`}</span>}
-          <span className="spacer" />
-          <button title="New terminal in project" onClick={() => startTerminal()}>＋</button>
-          <button title="Restart shell" onClick={() => startTerminal(termCwd || undefined)}>⟳</button>
-          <button title="Hide terminal (⌃`)" onClick={() => setBottom(null)}>✕</button>
-        </div>
-        <div
-          className="terminal-host"
-          ref={termHostRef}
-          onMouseDown={() => termRef.current?.focus()}
-        />
-      </div>
-
-      {/* ------------------------------------- bottom dock: build & upload output */}
-      {outOpen && (
-        <div className="bottom-dock output-dock">
-          <div className="dock-head">
-            <span>Output</span>
-            {busy && <span className="tag">● {busy}</span>}
-            <span className="spacer" />
-            <button onClick={() => setOut([])}>clear</button>
-            <button title="Hide output" onClick={() => setBottom(null)}>✕</button>
+          <div
+            className={`bottom-windows ${!termOpen || !rightOpen ? "single" : ""} ${!termOpen && !rightOpen ? "hidden" : ""}`}
+          >
+            <section
+              className={`terminal-window surface ${termOpen ? "" : "hidden"}`}
+              aria-label="Terminal"
+            >
+              <div className="window-heading">
+                <Icon name="terminal" />
+                <strong>Terminal</strong>
+                <span className="term-cwd" title={termCwd}>
+                  {baseName(termCwd)}
+                </span>
+                <span className="spacer" />
+                <span className="shell-label">{shellName}</span>
+                <button
+                  className="icon-button"
+                  title="Restart shell"
+                  aria-label="Restart shell"
+                  onClick={() => startTerminal()}
+                >
+                  <Icon name="refresh" />
+                </button>
+                <button
+                  className="icon-button"
+                  title="Expand terminal"
+                  aria-label="Expand terminal"
+                  onClick={() => setBottomExpanded((v) => !v)}
+                >
+                  <Icon name="expand" />
+                </button>
+                <button
+                  className="icon-button"
+                  title="Hide terminal"
+                  aria-label="Hide terminal"
+                  onClick={() => setTermOpen(false)}
+                >
+                  <Icon name="close" />
+                </button>
+              </div>
+              <div
+                className="terminal-host"
+                ref={termHostRef}
+                onMouseDown={() => termRef.current?.focus()}
+              />
+            </section>
+            <section
+              className={`output-window surface ${rightOpen ? "" : "hidden"}`}
+              aria-label="Output panels"
+            >
+              <div
+                className="output-tabs"
+                role="tablist"
+                aria-label="Output view"
+              >
+                <button
+                  role="tab"
+                  aria-selected={rightTab === "serial"}
+                  className={rightTab === "serial" ? "active" : ""}
+                  onClick={() => showRight("serial")}
+                >
+                  <Icon name="serial" />
+                  Serial Output
+                </button>
+                <button
+                  role="tab"
+                  aria-selected={rightTab === "output"}
+                  className={rightTab === "output" ? "active" : ""}
+                  onClick={() => showRight("output")}
+                >
+                  <Icon name="output" />
+                  Build Output{busy && <span className="live-dot" />}
+                </button>
+                <button
+                  role="tab"
+                  aria-selected={rightTab === "problems"}
+                  className={rightTab === "problems" ? "active" : ""}
+                  onClick={() => showRight("problems")}
+                >
+                  <Icon name="warning" />
+                  Problems<span className="count">{diagnostics.length}</span>
+                </button>
+                <span className="spacer" />
+                <button
+                  className="icon-button"
+                  aria-label="Hide output panels"
+                  title="Hide output panels"
+                  onClick={() => setRightOpen(false)}
+                >
+                  <Icon name="close" />
+                </button>
+              </div>
+              {rightTab === "serial" && (
+                <div className="serial-panel">
+                  <div className="serial-tools">
+                    <span
+                      className={`connection ${serialOpen ? "connected" : ""}`}
+                    >
+                      <i />
+                      {serialOpen ? "Connected" : "Monitor stopped"}
+                    </span>
+                    <span className="spacer" />
+                    <select
+                      aria-label="Serial baud rate"
+                      value={baud}
+                      onChange={(e) => setBaud(Number(e.target.value))}
+                      disabled={serialOpen}
+                    >
+                      {[9600, 19200, 57600, 115200, 230400].map((b) => (
+                        <option key={b}>{b}</option>
+                      ))}
+                    </select>
+                    <button
+                      className="icon-button"
+                      aria-label={
+                        serialOpen
+                          ? "Stop serial monitor"
+                          : "Start serial monitor"
+                      }
+                      title={serialOpen ? "Stop monitor" : "Start monitor"}
+                      onClick={toggleSerial}
+                      disabled={!serialOpen && (!port || !!busy)}
+                    >
+                      <Icon name={serialOpen ? "stop" : "play"} />
+                    </button>
+                    <button
+                      className="icon-button"
+                      title="Clear serial output"
+                      aria-label="Clear serial output"
+                      onClick={() => setSerialText("")}
+                    >
+                      <Icon name="trash" />
+                    </button>
+                  </div>
+                  <pre
+                    ref={serRef}
+                    className={`serial ${!serialText ? "muted" : ""}`}
+                  >
+                    {serialText ||
+                      (port
+                        ? "Start the monitor to see messages from your board."
+                        : "Connect a board and select a serial port to get started.")}
+                  </pre>
+                  <form
+                    className="serial-send"
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      try {
+                        await invoke("serial_write", {
+                          data: serialInput + lineEnding,
+                        });
+                        setSerialInput("");
+                      } catch (error) {
+                        log(`Serial send: ${error}`);
+                      }
+                    }}
+                  >
+                    <input
+                      aria-label="Serial message"
+                      placeholder="Send to board…"
+                      value={serialInput}
+                      onChange={(e) => setSerialInput(e.target.value)}
+                      disabled={!serialOpen}
+                    />
+                    <select
+                      aria-label="Line ending"
+                      value={lineEnding}
+                      onChange={(e) => setLineEnding(e.target.value)}
+                    >
+                      <option value="">None</option>
+                      <option value={"\n"}>LF</option>
+                      <option value={"\r\n"}>CRLF</option>
+                    </select>
+                    <button
+                      className="icon-button"
+                      title="Send to board"
+                      aria-label="Send to board"
+                      disabled={!serialOpen}
+                      type="submit"
+                    >
+                      <Icon name="send" />
+                    </button>
+                  </form>
+                </div>
+              )}
+              {rightTab === "output" && (
+                <>
+                  <div className="output-tools">
+                    <span className={buildState === "err" ? "err" : "muted"}>
+                      {busy ||
+                        (buildState === "ok"
+                          ? "Task completed"
+                          : buildState === "err"
+                            ? "Task failed"
+                            : "Build & upload log")}
+                    </span>
+                    <span className="spacer" />
+                    {busy && (
+                      <button onClick={cancelTask}>
+                        <Icon name="stop" />
+                        Stop
+                      </button>
+                    )}
+                    <button
+                      className="icon-button"
+                      title="Clear build output"
+                      aria-label="Clear build output"
+                      onClick={() => setOut([])}
+                    >
+                      <Icon name="trash" />
+                    </button>
+                  </div>
+                  <pre ref={logRef} className="out">
+                    {out.length
+                      ? out.join("\n")
+                      : "Ready. Verify or upload your project to view its output."}
+                  </pre>
+                </>
+              )}
+              {rightTab === "problems" && (
+                <div className="problems-list">
+                  {diagnostics.length ? (
+                    diagnostics.map((d, i) => (
+                      <button
+                        className="problem-row"
+                        key={i}
+                        onClick={async () => {
+                          await openFile(d.path, { pin: true });
+                          setTimeout(() => gotoLine(d.line), 80);
+                        }}
+                      >
+                        <Icon
+                          name="warning"
+                          className={d.severity === "error" ? "err" : "warning"}
+                        />
+                        <div>
+                          <strong>{d.message}</strong>
+                          <small>
+                            {baseName(d.path)} · {d.line}:{d.column}
+                          </small>
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="quiet-empty">
+                      <Icon name="check" />
+                      <div>
+                        No compiler diagnostics.
+                        <small>Verify your project to check for errors.</small>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
           </div>
-          <pre ref={logRef} className="out">{out.length ? out.join("\n") : "Ready."}</pre>
-        </div>
-      )}
+        </section>
 
-      {/* ---------------------------------------------------------- status bar */}
-      <div className="statusbar">
-        <span
-          className={`sb-item click ${buildState === "ok" ? "ok" : buildState === "err" ? "err" : ""}`}
-          onClick={toggleOutput}
-          title="Build & upload output"
-        >
-          {buildState === "idle" ? "○ ready" : buildState === "ok" ? "✓ ok" : buildState === "cancelled" ? "○ cancelled" : "✗ failed"}
-          {busy ? ` · ${busy}` : ""}
-        </span>
-        <span className="sb-item click" onClick={() => { setPanel("serial"); setPanelOpen(true); }}>
-          {serialOpen ? `● ${port} @ ${baud}` : `○ ${port || "no port"}`}
-        </span>
-        <span className="sb-item click" onClick={toggleOutput} title="Output">
-          {outOpen ? "▾ output" : "▸ output"}
-        </span>
-        <span className="sb-item click" onClick={toggleTerminal} title="Terminal (⌃`)">
-          {termOpen ? "▾ terminal" : "▸ terminal"}
-        </span>
-        <span className="spacer" />
-        {active && (
+        {panelOpen && (
           <>
-            <span className="sb-item">{active.path}</span>
-            <span className="sb-item">{activeLang}</span>
-            <span className="sb-item">Ln {cursor.line}, Col {cursor.col}</span>
+            <div
+              className="panel-dismiss"
+              onClick={() => setPanelOpen(false)}
+            />
+            <aside className="floating-panel surface" aria-label={panelTitle}>
+              <div className="window-heading">
+                <strong>{panelTitle}</strong>
+                <span className="spacer" />
+                {panel === "files" && (
+                  <>
+                    <button
+                      className="icon-button"
+                      title="New file"
+                      aria-label="New file"
+                      onClick={newFile}
+                    >
+                      <Icon name="plus" />
+                    </button>
+                    <button
+                      className="icon-button"
+                      title="Refresh files"
+                      aria-label="Refresh files"
+                      onClick={() => refreshTree(projectDir)}
+                    >
+                      <Icon name="refresh" />
+                    </button>
+                  </>
+                )}
+                <button
+                  className="icon-button"
+                  title="Close panel"
+                  aria-label="Close panel"
+                  onClick={() => setPanelOpen(false)}
+                >
+                  <Icon name="close" />
+                </button>
+              </div>
+              <div className="dock-body">
+                {panel === "home" && (
+                  <div className="panel-content">
+                    <div className="panel-intro">
+                      <Icon name="home" />
+                      <div>
+                        <h2>Your workspace</h2>
+                        <p>Pick up where you left off.</p>
+                      </div>
+                    </div>
+                    <div className="button-row">
+                      <button className="primary" onClick={openProject}>
+                        <Icon name="folder" />
+                        Open project
+                      </button>
+                      <button onClick={() => newProject()}>
+                        <Icon name="plus" />
+                        New
+                      </button>
+                    </div>
+                    <div className="section-heading">Recent projects</div>
+                    {recents.length ? (
+                      recents.map((path) => (
+                        <button
+                          className="recent-project"
+                          key={path}
+                          onClick={() => void openProjectDir(path)}
+                        >
+                          <Icon name="folder" />
+                          <span>
+                            <strong>{baseName(path)}</strong>
+                            <small>
+                              {path.replace(homeDirRef.current || "~", "~")}
+                            </small>
+                          </span>
+                          <span>↗</span>
+                        </button>
+                      ))
+                    ) : (
+                      <p className="muted">
+                        Projects you open will appear here.
+                      </p>
+                    )}
+                    <div className="section-heading">Start from a template</div>
+                    {(["esp32", "uno", "nano"] as const).map((t) => (
+                      <button
+                        className="template-row"
+                        key={t}
+                        onClick={() => newProject(t)}
+                      >
+                        <Icon name="chip" />
+                        <span>
+                          {t === "esp32"
+                            ? "ESP32"
+                            : t === "uno"
+                              ? "Arduino Uno"
+                              : "Arduino Nano"}
+                        </span>
+                        <Icon name="plus" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {panel === "files" && (
+                  <div className="tree">
+                    {treeRoot.length ? (
+                      renderNodes(treeRoot, 0)
+                    ) : (
+                      <div className="illustrated-empty">
+                        <Icon name="folder" />
+                        <h3>No project open</h3>
+                        <button onClick={openProject}>Open project</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {panel === "outline" && (
+                  <div className="outline-list">
+                    {outline.length ? (
+                      outline.map((s, i) => (
+                        <button
+                          className="outline-row"
+                          key={i}
+                          onClick={() => gotoLine(s.line)}
+                        >
+                          <span className="kind">{s.kind}</span>
+                          <span className="nm">{s.name}</span>
+                          <span className="ln">{s.line}</span>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="quiet-empty">
+                        No symbols in this file.
+                      </div>
+                    )}
+                  </div>
+                )}
+                {panel === "git" && (
+                  <GitPanel projectDir={projectDir} onChange={refreshBranch} />
+                )}
+                {panel === "debug" && <DebugPanel projectDir={projectDir} />}
+                {panel === "libraries" && (
+                  <LibrariesPanel projectDir={projectDir} />
+                )}
+                {panel === "boards" && <BoardsPanel />}
+                {panel === "settings" && (
+                  <div className="panel-content">
+                    <div className="panel-intro">
+                      <Icon name="settings" />
+                      <div>
+                        <h2>Make room for your flow</h2>
+                        <p>A few small adjustments, a calmer workspace.</p>
+                      </div>
+                    </div>
+                    <div className="section-heading">Editor</div>
+                    <label className="setting-row">
+                      Font size
+                      <select
+                        value={preferences.fontSize}
+                        onChange={(e) =>
+                          setPreferences((p) => ({
+                            ...p,
+                            fontSize: Number(e.target.value),
+                          }))
+                        }
+                      >
+                        {[11, 12, 13, 14, 15, 16, 18, 20].map((n) => (
+                          <option key={n} value={n}>
+                            {n} px
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="setting-row">
+                      Show minimap
+                      <input
+                        type="checkbox"
+                        checked={preferences.minimap}
+                        onChange={(e) =>
+                          setPreferences((p) => ({
+                            ...p,
+                            minimap: e.target.checked,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="setting-row">
+                      Wrap long lines
+                      <input
+                        type="checkbox"
+                        checked={preferences.wordWrap}
+                        onChange={(e) =>
+                          setPreferences((p) => ({
+                            ...p,
+                            wordWrap: e.target.checked,
+                          }))
+                        }
+                      />
+                    </label>
+                    <div className="section-heading">Floating dock</div>
+                    <p className="muted">
+                      Choose your tools. The dock fits what you keep.
+                    </p>
+                    {dockItems.map((item) => (
+                      <label key={item.id} className="setting-row">
+                        <span>
+                          <Icon name={item.icon} />
+                          {item.label}
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={preferences.dock.includes(item.id)}
+                          onChange={(e) =>
+                            setPreferences((p) => ({
+                              ...p,
+                              dock: e.target.checked
+                                ? [...p.dock, item.id]
+                                : p.dock.filter((id) => id !== item.id),
+                            }))
+                          }
+                        />
+                      </label>
+                    ))}
+                    <div className="section-heading">Tools</div>
+                    <button
+                      className="full-width"
+                      onClick={() => {
+                        setPanelOpen(false);
+                        openPalette();
+                      }}
+                    >
+                      <Icon name="command" />
+                      Command palette <kbd>⇧⌘P</kbd>
+                    </button>
+                    <p className="version-label">OpenPlatform · Version 1.0</p>
+                  </div>
+                )}
+              </div>
+            </aside>
           </>
         )}
-        <span className="sb-item click" title="Restart C++ language server" onClick={() => setLanguageRevision(n => n + 1)}>{languageStatus}</span>
-      </div>
-
+      </main>
+      <footer className="statusbar">
+        <button title="Source control" onClick={() => selectPanel("git")}>
+          <Icon name="branch" />
+          {branch || "No repository"}
+          <Icon name="chevron" />
+        </button>
+        <span className="status-divider" />
+        <button
+          title="Compiler diagnostics"
+          onClick={() => showRight("problems")}
+        >
+          <Icon
+            name={diagnostics.length ? "warning" : "check"}
+            className={diagnostics.length ? "warning" : "ok"}
+          />
+          {diagnostics.length} problems
+        </button>
+        {(busy || buildState !== "idle") && (
+          <button
+            className={buildState === "err" ? "err" : "status-task"}
+            title={status}
+            onClick={() => showRight("output")}
+          >
+            {busy ||
+              (buildState === "ok"
+                ? "Task completed"
+                : buildState === "cancelled"
+                  ? "Task cancelled"
+                  : "Task failed")}
+          </button>
+        )}
+        <span className="spacer" />
+        <button
+          title="Restart C++ language server"
+          onClick={() => setLanguageRevision((n) => n + 1)}
+        >
+          <i
+            className={`status-dot ${languageStatus === "C++ ready" ? "ready" : ""}`}
+          />
+          {languageStatus}
+        </button>
+        <span className="status-divider" />
+        <span>UTF-8</span>
+        {active && (
+          <span>
+            Ln {cursor.line}, Col {cursor.col}
+          </span>
+        )}
+        <span className="status-divider" />
+        <button
+          title={port || "Select a serial port"}
+          onClick={() => showRight("serial")}
+        >
+          <i className={`status-dot ${serialOpen ? "ready" : ""}`} />
+          {serialOpen
+            ? "Board connected"
+            : port
+              ? "Board detected"
+              : "No board"}
+        </button>
+      </footer>
       {/* -------------------------------------------------------- modal_layer */}
       {overlay && (
         <div className="overlay" onClick={() => setOverlay(null)}>
@@ -1725,14 +2596,16 @@ export default function App() {
                 overlay === "palette"
                   ? "Run a command…"
                   : overlay === "finder"
-                  ? "Go to file…"
-                  : "Find in project…"
+                    ? "Go to file…"
+                    : "Find in project…"
               }
               onChange={(e) => setOverlayQuery(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "ArrowDown") {
                   e.preventDefault();
-                  setOverlaySel((s) => Math.min(s + 1, overlayItems.length - 1));
+                  setOverlaySel((s) =>
+                    Math.min(s + 1, overlayItems.length - 1),
+                  );
                 } else if (e.key === "ArrowUp") {
                   e.preventDefault();
                   setOverlaySel((s) => Math.max(s - 1, 0));

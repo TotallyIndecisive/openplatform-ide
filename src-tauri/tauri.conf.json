@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "openplatform-ide",
-  "version": "0.1.0",
+  "productName": "OpenPlatform",
+  "version": "1.0.0",
   "identifier": "com.smckenzie.openplatform-ide",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -12,9 +12,13 @@
   "app": {
     "windows": [
       {
-        "title": "openplatform-ide",
-        "width": 800,
-        "height": 600
+        "title": "OpenPlatform",
+        "width": 1480,
+        "height": 940,
+        "minWidth": 900,
+        "minHeight": 620,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {
