@@ -1,5 +1,7 @@
 # Openplatform IDE capability review — 24 October 2026
 
+> **Historical snapshot:** This review and its roadmap describe the IDE on 24 October 2026. Git, GitHub, boards and libraries have changed since then. For the current feature list and the 27 October updates, see the [README](../README.md) and [GitHub source-control guide](github-source-control.md).
+
 This review is based on the project source, local desktop interaction, the installed
 PlatformIO/clangd tools, and the connected ESP32. The existing visual design is retained.
 It is an Arduino/PlatformIO desktop IDE foundation, not yet full VS Code or Zed parity.

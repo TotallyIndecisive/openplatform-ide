@@ -1,0 +1,95 @@
+.accounts-settings {
+  margin: 2px 0 24px;
+}
+.accounts-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.accounts-heading > div {
+  flex: 1;
+}
+.accounts-heading h3 {
+  font-size: 13px;
+}
+.accounts-heading p,
+.accounts-note {
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-top: 4px;
+}
+.accounts-heading button {
+  font-size: 11px;
+  min-width: 54px;
+}
+.accounts-card {
+  background: #fafcfd;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 13px;
+}
+.accounts-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  margin-bottom: 11px;
+}
+.accounts-dot {
+  width: 7px;
+  height: 7px;
+  background: #aeb8c5;
+  border-radius: 50%;
+}
+.accounts-dot.connected {
+  background: #22ac72;
+}
+.accounts-card label {
+  margin: 10px 0;
+  font-size: 10px;
+  font-weight: 500;
+}
+.accounts-card input {
+  width: 100%;
+  font-size: 11px;
+}
+.accounts-card input:disabled {
+  color: #738298;
+  background: #eef2f5;
+  border-color: #e3e9ed;
+  opacity: 1;
+  cursor: default;
+}
+.accounts-last {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 13px 0 4px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+.accounts-last strong {
+  font-weight: 500;
+  color: #66788d;
+}
+.accounts-note {
+  margin: 11px 0;
+}
+.accounts-card .button-row {
+  margin-top: 12px;
+}
+.accounts-card .button-row button {
+  font-size: 10.5px;
+}
+.accounts-notice {
+  margin-top: 10px;
+  padding: 8px;
+  border-radius: 6px;
+  background: #eef6f5;
+  color: #405c67;
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

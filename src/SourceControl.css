@@ -1,0 +1,190 @@
+.source-control .sc-account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+.source-control .sc-account > div {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.source-control .sc-account strong {
+  font-size: 11px;
+}
+.source-control .sc-account span,
+.source-control .sc-hint {
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.source-control .sc-account button {
+  font-size: 11px;
+}
+.source-control .sc-start {
+  text-align: center;
+  padding: 26px 0;
+}
+.source-control .sc-start > svg {
+  color: var(--accent);
+  margin: 0 auto 12px;
+}
+.source-control .sc-start p {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 8px 0 16px;
+}
+.source-control .sc-branch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+}
+.source-control .sc-branch > svg {
+  color: var(--accent);
+  width: 16px;
+}
+.source-control .sc-branch select {
+  flex: 1;
+  min-width: 0;
+}
+.source-control .sc-commit-message {
+  width: 100%;
+  margin: 12px 0 6px;
+  font-size: 11px;
+}
+.source-control .sc-sync {
+  margin: 9px 0;
+}
+.source-control .sc-details {
+  margin-top: 14px;
+  padding-top: 10px;
+}
+.source-control .sc-details label {
+  margin: 9px 0;
+}
+.source-control .sc-remote {
+  font: 10px/1.5 var(--mono);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 14px 0;
+}
+.source-control .sc-remote span {
+  font-weight: 600;
+  color: var(--text);
+}
+.source-control .sc-file {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border-soft);
+}
+.source-control .sc-file-name {
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  padding: 6px 0;
+  text-align: left;
+}
+.source-control .sc-file-name svg {
+  width: 14px;
+  color: var(--muted);
+}
+.source-control .sc-file-name span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.source-control .sc-file-name small {
+  color: var(--accent);
+  font-size: 10px;
+}
+.source-control .sc-file-name .sc-conflict,
+.source-control .sc-error {
+  color: var(--red);
+}
+.source-control .sc-file-action {
+  font-size: 16px;
+  border: 0;
+  background: transparent;
+}
+.source-control .sc-signin {
+  padding: 12px;
+  background: #f7fafb;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 12px 0;
+}
+.source-control .sc-subheading {
+  font-weight: 600;
+  font-size: 12px;
+}
+.source-control .sc-signin p {
+  font-size: 10.5px;
+  color: var(--muted);
+  margin: 6px 0;
+}
+.source-control .sc-auth-terminal {
+  height: 164px;
+  background: #f7fafb;
+  overflow: hidden;
+  margin: 10px 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  padding: 5px;
+}
+.source-control .sc-auth-terminal .xterm {
+  height: 100%;
+}
+.source-control .sc-busy {
+  position: sticky;
+  bottom: 0;
+  background: #e4f4f2;
+  color: #007b78;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  margin-top: 10px;
+}
+.source-control .sc-diff {
+  position: absolute;
+  inset: 40px 0 0;
+  background: white;
+  display: flex;
+  flex-direction: column;
+  z-index: 2;
+}
+.source-control .sc-diff-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.source-control .sc-diff-head strong {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.source-control .sc-diff pre {
+  flex: 1;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  font: 10.5px/1.55 var(--mono);
+  white-space: pre;
+  user-select: text;
+}

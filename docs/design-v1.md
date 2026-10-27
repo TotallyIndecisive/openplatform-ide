@@ -1,5 +1,7 @@
 # v1 layout implementation
 
+This is the `v1.0.0` layout snapshot. Account settings and source-control features were expanded on 27 October 2026; see [GitHub and source control](github-source-control.md) for their current behavior.
+
 The accepted compact image concept is implemented as a light macOS workspace. The editor remains the dominant central surface, with centered file tabs above it and two independent bottom windows. Fine borders, 8px gutters, subtle shadows and a teal accent connect the panels without removing their separation.
 
 The left dock is a narrow, vertically centered floating rectangle. Its icons are 18px with hover/focus labels. Settings can hide or restore tools; its height fits the visible controls. More Tools and Settings stay available so hidden tools can always be reached again.

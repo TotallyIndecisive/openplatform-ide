@@ -19,12 +19,13 @@ import "@xterm/xterm/css/xterm.css";
 import "./App.css";
 import { Icon } from "./Icons";
 import {
-  GitPanel,
   DebugPanel,
   LibrariesPanel,
   BoardsPanel,
 } from "./WorkspacePanels";
 import { dockItems, usePreferences } from "./preferences";
+import { GitPanel } from "./SourceControl";
+import { AccountsSettings } from "./AccountsSettings";
 
 // Bundle Monaco locally (no CDN at runtime).
 (self as any).MonacoEnvironment = {
@@ -2420,7 +2421,7 @@ export default function App() {
                   </div>
                 )}
                 {panel === "git" && (
-                  <GitPanel projectDir={projectDir} onChange={refreshBranch} />
+                  <GitPanel projectDir={projectDir} onChange={refreshBranch} onSettings={() => setPanel("settings")} />
                 )}
                 {panel === "debug" && <DebugPanel projectDir={projectDir} />}
                 {panel === "libraries" && (
@@ -2436,6 +2437,7 @@ export default function App() {
                         <p>A few small adjustments, a calmer workspace.</p>
                       </div>
                     </div>
+                    <AccountsSettings projectDir={projectDir} />
                     <div className="section-heading">Editor</div>
                     <label className="setting-row">
                       Font size

@@ -9,6 +9,7 @@ use tauri::{Emitter, Manager};
 mod tooling;
 mod tasks;
 mod language;
+mod source_control;
 
 
 
@@ -1294,6 +1295,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(SerialState::default())
         .manage(TerminalState::default())
+        .manage(source_control::AuthState::default())
         .manage(tasks::TaskState::default())
         .manage(language::LanguageState::default())
         .on_window_event(|window, event| {
@@ -1301,10 +1303,12 @@ pub fn run() {
                 tasks::cli_cancel(window.state::<tasks::TaskState>());
                 serial_stop_inner(&window.state::<SerialState>());
                 terminal_stop_inner(&window.state::<TerminalState>());
+                source_control::stop_auth(&window.state::<source_control::AuthState>());
                 language::stop(&window.state::<language::LanguageState>());
             }
         })
         .invoke_handler(tauri::generate_handler![
+            source_control::sc_status, source_control::sc_account, source_control::sc_switch_account, source_control::sc_action, source_control::sc_auth_start, source_control::sc_auth_write, source_control::sc_auth_stop,
             git_status, git_diff, git_add, git_reset, git_commit, git_log, git_branches, git_init,
             git_push, git_pull, git_remote_add, git_remote_list, git_checkout,
             gh_auth_status, gh_repo_create, gh_repo_create_remote,
@@ -1357,6 +1361,7 @@ pub fn run() {
                     tasks::cli_cancel(app.state::<tasks::TaskState>());
                     serial_stop_inner(&app.state::<SerialState>());
                     terminal_stop_inner(&app.state::<TerminalState>());
+                    source_control::stop_auth(&app.state::<source_control::AuthState>());
                     language::stop(&app.state::<language::LanguageState>());
                 }
                 _ => {}
