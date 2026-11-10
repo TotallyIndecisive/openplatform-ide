@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 export const dockItems = [
   { id: "home", label: "Home", icon: "home" },
   { id: "files", label: "Project files", icon: "folder" },
+  { id: "ai", label: "AI assistant", icon: "ai" },
   { id: "git", label: "GitHub", icon: "github" },
   { id: "libraries", label: "Libraries", icon: "library" },
   { id: "boards", label: "Boards", icon: "chip" },
@@ -35,7 +36,7 @@ export function usePreferences() {
         minimap: saved.minimap !== false,
         wordWrap: saved.wordWrap !== false,
         dock: Array.isArray(saved.dock)
-          ? defaults.dock.filter((id) => saved.dock.includes(id))
+          ? defaults.dock.filter((id) => saved.dock.includes(id) || (id === "ai" && !saved.aiDockConfigured))
           : defaults.dock,
       };
     } catch {
@@ -45,7 +46,7 @@ export function usePreferences() {
   useEffect(() => {
     localStorage.setItem(
       "openplatform:appearance",
-      JSON.stringify(preferences),
+      JSON.stringify({ ...preferences, aiDockConfigured: true }),
     );
   }, [preferences]);
   return [preferences, setPreferences] as const;

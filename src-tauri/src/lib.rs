@@ -541,6 +541,48 @@ struct AppPaths {
     esptool: Option<String>,
 }
 
+fn ai_response(provider: &str, status: u16, body: &serde_json::Value) -> Result<String, String> {
+    if provider == "openrouter" && status == 429 {
+        return Err("OpenRouter rate limit (429). The selected free model or your account may be temporarily limited. Wait and retry, check your OpenRouter usage, or choose another free model such as openrouter/free in Settings.".into());
+    }
+    if !(200..300).contains(&status) {
+        let error = body.get("error").and_then(|e| e.as_str().or_else(|| e.get("message").and_then(|m| m.as_str()))).unwrap_or("Request failed");
+        return Err(format!("{provider} ({status}): {error}"));
+    }
+    let pointer = if provider == "openrouter" { "/choices/0/message/content" } else { "/message/content" };
+    body.pointer(pointer).and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()).map(str::to_owned).ok_or_else(|| format!("{provider} returned an empty response."))
+}
+
+#[tauri::command]
+async fn ai_chat(provider: String, api_key: String, model: String, messages: Vec<serde_json::Value>) -> Result<String, String> {
+    let endpoint = match provider.as_str() {
+        "ollama" => "https://ollama.com/api/chat",
+        "openrouter" => "https://openrouter.ai/api/v1/chat/completions",
+        _ => return Err("Unsupported AI provider.".into()),
+    };
+    if api_key.trim().is_empty() || model.trim().is_empty() { return Err("Add an API key and model in Settings.".into()); }
+    let response = reqwest::Client::builder().timeout(std::time::Duration::from_secs(120)).build().map_err(|e| e.to_string())?
+        .post(endpoint).bearer_auth(api_key.trim())
+        .json(&serde_json::json!({"model": model.trim(), "messages": messages, "stream": false}))
+        .send().await.map_err(|e| format!("Could not reach {provider}: {e}"))?;
+    let status = response.status().as_u16();
+    let body: serde_json::Value = response.json().await.map_err(|_| format!("{provider} returned an invalid response (HTTP {status})."))?;
+    ai_response(&provider, status, &body)
+}
+
+#[cfg(test)]
+mod ai_tests {
+    use super::*;
+    #[test]
+    fn parses_provider_responses_and_errors() {
+        assert_eq!(ai_response("ollama", 200, &serde_json::json!({"message":{"content":"hello"}})).unwrap(), "hello");
+        assert_eq!(ai_response("openrouter", 200, &serde_json::json!({"choices":[{"message":{"content":"hi"}}]})).unwrap(), "hi");
+        assert!(ai_response("openrouter", 429, &serde_json::json!({"error":{"message":"Provider returned error"}})).unwrap_err().contains("rate limit"));
+        assert!(ai_response("openrouter", 401, &serde_json::json!({"error":{"message":"bad key"}})).unwrap_err().contains("bad key"));
+        assert!(ai_response("openrouter", 200, &serde_json::json!({"choices":[]})).is_err());
+    }
+}
+
 #[tauri::command]
 fn app_paths() -> AppPaths {
     let home = home();
@@ -1308,6 +1350,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            ai_chat,
             source_control::sc_status, source_control::sc_account, source_control::sc_switch_account, source_control::sc_action, source_control::sc_auth_start, source_control::sc_auth_write, source_control::sc_auth_stop,
             git_status, git_diff, git_add, git_reset, git_commit, git_log, git_branches, git_init,
             git_push, git_pull, git_remote_add, git_remote_list, git_checkout,

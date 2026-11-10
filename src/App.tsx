@@ -161,6 +161,7 @@ export default function App() {
   const [expanded, setExpanded] = useState<Record<string, FileNode[]>>({});
   const [panel, setPanel] = useState<
     | "home"
+    | "ai"
     | "files"
     | "outline"
     | "git"
@@ -170,6 +171,34 @@ export default function App() {
     | "settings"
   >("files");
   const [panelOpen, setPanelOpen] = useState(false);
+  const [aiComposerOpen, setAiComposerOpen] = useState(false);
+  type AiProvider = "ollama" | "openrouter";
+  type AiMessage = {role: "user" | "assistant"; content: string};
+  const [aiProvider, setAiProvider] = useState<AiProvider>(() => localStorage.getItem("openplatform:ai-provider") === "openrouter" ? "openrouter" : "ollama");
+  const [aiKeys, setAiKeys] = useState<Record<AiProvider, string>>({ollama: "", openrouter: ""});
+  const [aiModels, setAiModels] = useState<Record<AiProvider, string>>(() => ({ollama: localStorage.getItem("openplatform:ai-model:ollama") || localStorage.getItem("openplatform:ai-model") || "", openrouter: localStorage.getItem("openplatform:ai-model:openrouter") || ""}));
+  const [aiInput, setAiInput] = useState("");
+  const [aiConversations, setAiConversations] = useState<Record<AiProvider, AiMessage[]>>({ollama: [], openrouter: []});
+  const aiKey = aiKeys[aiProvider];
+  const aiModel = aiModels[aiProvider];
+  const aiMessages = aiConversations[aiProvider];
+  const providerName = aiProvider === "ollama" ? "Ollama Cloud" : "OpenRouter";
+  const setAiMessages = (messages: AiMessage[]) => setAiConversations((current) => ({...current, [aiProvider]: messages}));
+  const [aiExpanded, setAiExpanded] = useState<number | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const sendAi = async () => {
+    const content = aiInput.trim();
+    if (!content || aiBusy) return;
+    if (!aiKey.trim() || !aiModel.trim()) { setAiError("Add your API key and model in Settings."); setPanel("settings"); setPanelOpen(true); return; }
+    const messages = [...aiMessages, {role: "user" as const, content}];
+    setAiMessages(messages); setAiInput(""); setAiBusy(true); setAiError(""); setPanel("ai"); setPanelOpen(true);
+    try {
+      const reply = await invoke<string>("ai_chat", {provider: aiProvider, apiKey: aiKey, model: aiModel, messages});
+      setAiMessages([...messages, {role: "assistant", content: reply}]); setAiExpanded(messages.length);
+    } catch (error) { setAiMessages(messages.slice(0, -1)); setAiInput(content); setAiError(String(error)); }
+    finally { setAiBusy(false); }
+  };
   const [outline, setOutline] = useState<Symbol[]>([]);
   const [overlay, setOverlay] = useState<
     null | "palette" | "finder" | "search"
@@ -1599,6 +1628,7 @@ export default function App() {
 
   const panelTitle = {
     home: "Workspace",
+    ai: "AI assistant",
     files: "Project files",
     outline: "Outline",
     git: "GitHub",
@@ -2329,6 +2359,17 @@ export default function App() {
                 </button>
               </div>
               <div className="dock-body">
+                {panel === "ai" && (
+                  <div className="ai-panel">
+                    <div className="ai-history-heading"><strong>{aiModel || "AI chat"}</strong><button onClick={() => { setPanel("settings"); setPanelOpen(true); }}>Settings</button></div>
+                    <p className="ai-muted">{aiModel ? providerName + " · " + aiModel : "Connect a provider in Settings to start."}</p>
+                    {aiMessages.length === 0 && <p className="ai-muted">Your conversation will appear here.</p>}
+                    {aiMessages.map((message, index) => <button key={index} className="ai-history" onClick={() => setAiExpanded(aiExpanded === index ? null : index)} aria-expanded={aiExpanded === index}><span><strong>{message.role === "user" ? "You" : "Assistant"}</strong><small style={aiExpanded === index ? {whiteSpace: "pre-wrap", overflowWrap: "anywhere"} : undefined}>{message.content}</small></span></button>)}
+                    {aiBusy && <p className="ai-muted">Thinking…</p>}
+                    {aiError && <p className="ai-error" role="alert">{aiError}</p>}
+                    {aiMessages.length > 0 && <button disabled={aiBusy} onClick={() => { setAiMessages([]); setAiError(""); }}>New conversation</button>}
+                  </div>
+                )}
                 {panel === "home" && (
                   <div className="panel-content">
                     <div className="panel-intro">
@@ -2442,6 +2483,13 @@ export default function App() {
                         <p>A few small adjustments, a calmer workspace.</p>
                       </div>
                     </div>
+                    <div className="section-heading">AI assistant</div>
+                    <div className="ai-settings">
+                      <label>Provider<select value={aiProvider} disabled={aiBusy} onChange={(e) => { const next = e.target.value as AiProvider; setAiProvider(next); localStorage.setItem("openplatform:ai-provider", next); setAiError(""); setAiExpanded(null); }}><option value="ollama">Ollama Cloud</option><option value="openrouter">OpenRouter</option></select></label>
+                      <label>Model<input value={aiModel} placeholder={aiProvider === "ollama" ? "e.g. gemma4:31b" : "e.g. openrouter/free"} onChange={(e) => { const value = e.target.value; setAiModels((current) => ({...current, [aiProvider]: value})); localStorage.setItem(`openplatform:ai-model:${aiProvider}`, value); }} /></label>
+                      <label>API key<input type="password" value={aiKey} placeholder={`Enter your ${providerName} API key`} autoComplete="off" onChange={(e) => setAiKeys((current) => ({...current, [aiProvider]: e.target.value}))} /></label>
+                      <p>Keys are kept for this session only. Messages are sent to {providerName}.</p>
+                    </div>
                     <AccountsSettings projectDir={projectDir} />
                     <div className="section-heading">Editor</div>
                     <label className="setting-row">
@@ -2531,6 +2579,10 @@ export default function App() {
           </>
         )}
       </main>
+      <div className={`ai-composer ${aiComposerOpen ? "expanded" : ""}`}>
+        <button className="ai-composer-toggle" aria-label={aiComposerOpen ? "Close AI composer" : "Open AI composer"} aria-expanded={aiComposerOpen} onClick={() => setAiComposerOpen(!aiComposerOpen)}><Icon name={aiComposerOpen ? "close" : "ai"} /></button>
+        {aiComposerOpen && <><input aria-label="Message AI assistant" placeholder="Ask about your project…" value={aiInput} onChange={(e) => setAiInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void sendAi(); }} /><button className="ai-send" disabled={aiBusy || !aiInput.trim()} aria-label="Send message" onClick={() => void sendAi()}><Icon name="send" /></button></>}
+      </div>
       <footer className="statusbar">
         <button title="Source control" onClick={() => selectPanel("git")}>
           <Icon name="branch" />

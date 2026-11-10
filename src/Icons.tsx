@@ -1,6 +1,7 @@
 import type { SVGProps } from "react";
 
 const paths = {
+  ai: "M12 2l2 6 6 2-6 2-2 6-2-6-6-2 6-2Zm7 13 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z",
   home: "m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z",
   folder: "M3 5h6l2 2h10v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z",
   file: "M14 2H5v20h14V7Zm0 0v5h5",
