@@ -1599,3 +1599,65 @@ select {
   padding-right: 25px !important;
 }
 .tree-row .ico { display: flex; align-items: center; }
+
+/* Motion uses transforms and opacity so editing and terminal layout stay stable. */
+@keyframes surface-pop {
+  from { opacity: 0; transform: scale(.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes slide-from-left {
+  from { opacity: 0; transform: translateX(-24px) scale(.97); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes slide-from-top {
+  from { opacity: 0; transform: translateY(-20px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes slide-from-bottom {
+  from { opacity: 0; transform: translateY(24px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes orbit-float {
+  0%, 100% { transform: translateY(0) rotate(-5deg); }
+  50% { transform: translateY(-9px) rotate(4deg); }
+}
+/* Each surface enters from its anchor, without moving the whole workspace. */
+.floating-panel {
+  transform-origin: left center;
+  animation: slide-from-left 320ms cubic-bezier(.16,1,.3,1) both;
+}
+.palette, .tabbar {
+  transform-origin: top center;
+  animation: slide-from-top 320ms cubic-bezier(.16,1,.3,1) both;
+}
+.terminal-window:not(.hidden), .output-window:not(.hidden) {
+  transform-origin: bottom center;
+  animation: slide-from-bottom 340ms cubic-bezier(.16,1,.3,1) both;
+}
+.editor-window { animation: surface-pop 300ms ease-out both; }
+.welcome > * { animation: surface-pop 450ms cubic-bezier(.16,1,.3,1) both; }
+.welcome > :nth-child(2) { animation-delay: 70ms; }
+.welcome > :nth-child(3) { animation-delay: 120ms; }
+.welcome > :nth-child(4) { animation-delay: 170ms; }
+.welcome > :nth-child(5) { animation-delay: 220ms; }
+.welcome > :nth-child(6) { animation-delay: 260ms; }
+.welcome { overflow: auto; }
+.welcome-orbit { position: relative; width: 260px; height: 155px; flex-shrink: 0; margin-bottom: 18px; }
+.orbit-ring { position: absolute; inset: 4px 45px; border: 1px solid #e6eee9; border-radius: 50%; }
+.orbit-ring::after { content: ''; position: absolute; inset: 20px -35px; border: 1px solid #f0f3ef; border-radius: 50%; }
+.orbit-token { position: absolute; display: grid; place-items: center; animation: orbit-float 6s ease-in-out infinite; font-weight: 600; }
+.token-chip { left: 95px; top: 40px; width: 72px; height: 72px; border-radius: 23px; background: #c3eae0; color: #227b6c; box-shadow: 0 8px 22px #31877612; }
+.token-chip svg { width: 32px; height: 32px; }
+.token-code { left: 17px; top: 28px; width: 48px; height: 48px; border-radius: 16px; background: #d8eaff; color: #4b89ba; font-size: 20px; animation-delay: -2s; }
+.token-spark { right: 20px; top: 12px; color: #efbd65; font-size: 46px; animation-delay: -3s; }
+.token-plus { right: 32px; bottom: 1px; width: 33px; height: 33px; border-radius: 11px; background: #fce4d7; color: #cb8966; font-size: 24px; animation-delay: -1s; }
+.orbit-dot { position: absolute; left: 58px; bottom: 15px; width: 12px; height: 12px; background: #a7d5bd; border-radius: 50%; }
+button, .dock-icon, .tab, .recent-project { transition: background-color 160ms ease, box-shadow 160ms ease, transform 180ms ease; }
+button:active:not(:disabled) { transform: scale(.97); }
+.dock-icon:hover { transform: translateY(-2px); }
+.dock-icon:active { transform: scale(.94); }
+.welcome .button-row button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px #26364d14; }
+@media (max-height: 650px) { .welcome-orbit { height: 115px; transform: scale(.8); margin-bottom: 0; } .welcome { padding: 16px; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

@@ -1715,7 +1715,7 @@ export default function App() {
         </nav>
 
         <section
-          className={`workspace-main ${!termOpen && !rightOpen ? "no-bottom" : ""}`}
+          className={`workspace-main ${!projectDir || (!termOpen && !rightOpen) ? "no-bottom" : ""}`}
         >
           <div className="tabs-region">
             <div className="tabbar" role="tablist" aria-label="Open files">
@@ -1996,8 +1996,13 @@ export default function App() {
               </div>
             ) : (
               <div className="welcome">
-                <div className="welcome-symbol">
-                  <Icon name="terminal" />
+                <div className="welcome-orbit" aria-hidden="true">
+                  <span className="orbit-ring" />
+                  <span className="orbit-token token-code">{'</>'}</span>
+                  <span className="orbit-token token-spark">✦</span>
+                  <span className="orbit-token token-chip"><Icon name="terminal" /></span>
+                  <span className="orbit-token token-plus">+</span>
+                  <span className="orbit-dot" />
                 </div>
                 <span className="eyebrow">OPENPLATFORM</span>
                 <h1>
@@ -2005,15 +2010,15 @@ export default function App() {
                   <br />
                   For your next big idea.
                 </h1>
-                <p>Open a project and make something work.</p>
+                <p>Create a project or pick up where you left off.</p>
                 <div className="button-row">
-                  <button className="primary" onClick={openProject}>
-                    <Icon name="folder" />
-                    Open project
-                  </button>
-                  <button onClick={() => newProject()}>
+                  <button className="primary" onClick={() => newProject()}>
                     <Icon name="plus" />
-                    New project
+                    Create a project
+                  </button>
+                  <button onClick={openProject}>
+                    <Icon name="folder" />
+                    Open a project
                   </button>
                 </div>
                 <button
@@ -2027,7 +2032,7 @@ export default function App() {
           </section>
 
           <div
-            className={`bottom-windows ${!termOpen || !rightOpen ? "single" : ""} ${!termOpen && !rightOpen ? "hidden" : ""}`}
+            className={`bottom-windows ${!termOpen || !rightOpen ? "single" : ""} ${!projectDir || (!termOpen && !rightOpen) ? "hidden" : ""}`}
           >
             <section
               className={`terminal-window surface ${termOpen ? "" : "hidden"}`}
@@ -2290,7 +2295,7 @@ export default function App() {
               className="panel-dismiss"
               onClick={() => setPanelOpen(false)}
             />
-            <aside className="floating-panel surface" aria-label={panelTitle}>
+            <aside key={panel} className="floating-panel surface" aria-label={panelTitle}>
               <div className="window-heading">
                 <strong>{panelTitle}</strong>
                 <span className="spacer" />
