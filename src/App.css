@@ -1696,3 +1696,16 @@ button:active:not(:disabled) { transform: scale(.97); }
 .ai-error { color: #b04b42; margin: 12px 0; }
 .ai-history > span { min-width: 0; flex: 1; }
 .ai-settings select { width: 100%; min-width: 0; padding: 8px; border: 1px solid #dce8e4; border-radius: 6px; background-color: white; color: #26364d; }
+.ai-thread-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 24px; font-size: 11px; }
+.ai-thread-heading button { display: flex; align-items: center; gap: 4px; font-size: 11px; }
+.ai-thread-heading button svg { width: 13px; height: 13px; }
+.ai-thread-heading time { color: #91a0aa; font-size: 10px; }
+.ai-thread-list { margin-top: 9px; display: grid; gap: 5px; }
+.ai-thread-row { display: flex; align-items: center; border: 1px solid #edf1f0; border-radius: 9px; background: white; }
+.ai-thread-row.selected { border-color: #b7dcd1; background: #f3faf7; }
+.ai-thread-select { flex: 1; min-width: 0; display: grid; text-align: left; gap: 4px; border: 0; padding: 10px; background: transparent; }
+.ai-thread-select strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.ai-thread-select time { font-size: 10px; color: #91a0aa; }
+.ai-thread-delete { flex: none; margin-right: 5px; }
+.ai-thread-messages { margin-top: 14px; border-top: 1px solid #edf1f0; }
+.ai-key-actions { display: flex; gap: 8px; }

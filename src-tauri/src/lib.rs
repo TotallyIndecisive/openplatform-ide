@@ -553,14 +553,58 @@ fn ai_response(provider: &str, status: u16, body: &serde_json::Value) -> Result<
     body.pointer(pointer).and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()).map(str::to_owned).ok_or_else(|| format!("{provider} returned an empty response."))
 }
 
+const AI_KEYCHAIN_SERVICE: &str = "com.smckenzie.openplatform-ide.ai";
+
+fn check_ai_provider(provider: &str) -> Result<(), String> {
+    match provider { "ollama" | "openrouter" => Ok(()), _ => Err("Unsupported AI provider.".into()) }
+}
+
+#[cfg(target_os = "macos")]
+fn read_ai_key(provider: &str) -> Result<Option<String>, String> {
+    check_ai_provider(provider)?;
+    match security_framework::passwords::get_generic_password(AI_KEYCHAIN_SERVICE, provider) {
+        Ok(value) => String::from_utf8(value).map(Some).map_err(|_| "Stored key is invalid. Replace it in Settings.".into()),
+        Err(error) if error.code() == -25300 => Ok(None),
+        Err(error) => Err(format!("Could not access macOS Keychain: {error}")),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_ai_key(_provider: &str) -> Result<Option<String>, String> { Err("Secure AI key storage is currently available on macOS only.".into()) }
+
 #[tauri::command]
-async fn ai_chat(provider: String, api_key: String, model: String, messages: Vec<serde_json::Value>) -> Result<String, String> {
+fn ai_key_status(provider: String) -> Result<bool, String> { Ok(read_ai_key(&provider)?.is_some()) }
+
+#[tauri::command]
+fn ai_key_save(provider: String, key: String) -> Result<(), String> {
+    check_ai_provider(&provider)?;
+    if key.trim().is_empty() { return Err("Enter an API key to save.".into()); }
+    #[cfg(target_os = "macos")]
+    { security_framework::passwords::set_generic_password(AI_KEYCHAIN_SERVICE, &provider, key.trim().as_bytes()).map_err(|e| format!("Could not save key in macOS Keychain: {e}")) }
+    #[cfg(not(target_os = "macos"))]
+    { Err("Secure AI key storage is currently available on macOS only.".into()) }
+}
+
+#[tauri::command]
+fn ai_key_delete(provider: String) -> Result<(), String> {
+    check_ai_provider(&provider)?;
+    #[cfg(target_os = "macos")]
+    { match security_framework::passwords::delete_generic_password(AI_KEYCHAIN_SERVICE, &provider) {
+        Ok(()) => Ok(()), Err(error) if error.code() == -25300 => Ok(()), Err(error) => Err(format!("Could not delete key from macOS Keychain: {error}")),
+    } }
+    #[cfg(not(target_os = "macos"))]
+    { Err("Secure AI key storage is currently available on macOS only.".into()) }
+}
+
+#[tauri::command]
+async fn ai_chat(provider: String, model: String, messages: Vec<serde_json::Value>) -> Result<String, String> {
     let endpoint = match provider.as_str() {
         "ollama" => "https://ollama.com/api/chat",
         "openrouter" => "https://openrouter.ai/api/v1/chat/completions",
         _ => return Err("Unsupported AI provider.".into()),
     };
-    if api_key.trim().is_empty() || model.trim().is_empty() { return Err("Add an API key and model in Settings.".into()); }
+    if model.trim().is_empty() { return Err("Add a model in Settings.".into()); }
+    let api_key = read_ai_key(&provider)?.ok_or("Save an API key in Settings.")?;
     let response = reqwest::Client::builder().timeout(std::time::Duration::from_secs(120)).build().map_err(|e| e.to_string())?
         .post(endpoint).bearer_auth(api_key.trim())
         .json(&serde_json::json!({"model": model.trim(), "messages": messages, "stream": false}))
@@ -1350,7 +1394,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            ai_chat,
+            ai_chat, ai_key_status, ai_key_save, ai_key_delete,
             source_control::sc_status, source_control::sc_account, source_control::sc_switch_account, source_control::sc_action, source_control::sc_auth_start, source_control::sc_auth_write, source_control::sc_auth_stop,
             git_status, git_diff, git_add, git_reset, git_commit, git_log, git_branches, git_init,
             git_push, git_pull, git_remote_add, git_remote_list, git_checkout,

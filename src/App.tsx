@@ -175,29 +175,86 @@ export default function App() {
   type AiProvider = "ollama" | "openrouter";
   type AiMessage = {role: "user" | "assistant"; content: string};
   const [aiProvider, setAiProvider] = useState<AiProvider>(() => localStorage.getItem("openplatform:ai-provider") === "openrouter" ? "openrouter" : "ollama");
-  const [aiKeys, setAiKeys] = useState<Record<AiProvider, string>>({ollama: "", openrouter: ""});
+  const [aiKeyDraft, setAiKeyDraft] = useState("");
+  const [aiKeySaved, setAiKeySaved] = useState(false);
+  const [aiKeyLoading, setAiKeyLoading] = useState(true);
+  const [aiKeyMessage, setAiKeyMessage] = useState("");
+  useEffect(() => {
+    let active = true;
+    setAiKeySaved(false); setAiKeyLoading(true); setAiKeyDraft(""); setAiKeyMessage("");
+    invoke<boolean>("ai_key_status", {provider: aiProvider}).then((saved) => { if (active) setAiKeySaved(saved); }).catch((error) => { if (active) setAiKeyMessage(String(error)); }).finally(() => { if (active) setAiKeyLoading(false); });
+    return () => { active = false; };
+  }, [aiProvider]);
+  const saveAiKey = async () => {
+    if (!aiKeyDraft.trim() || aiKeyLoading) return;
+    setAiKeyLoading(true); setAiKeyMessage("");
+    try { await invoke("ai_key_save", {provider: aiProvider, key: aiKeyDraft}); setAiKeySaved(true); setAiKeyDraft(""); setAiKeyMessage("API key saved in macOS Keychain."); }
+    catch (error) { setAiKeyMessage(String(error)); }
+    finally { setAiKeyLoading(false); }
+  };
+  const deleteAiKey = async () => {
+    if (aiKeyLoading || aiBusy) return;
+    setAiKeyLoading(true);
+    try {
+      const accepted = await confirm(`Delete the saved ${providerName} API key from Keychain?`, {title: "Delete API key", kind: "warning", okLabel: "Confirm", cancelLabel: "Cancel"});
+      if (!accepted) return;
+      setAiKeyMessage("");
+      await invoke("ai_key_delete", {provider: aiProvider}); setAiKeySaved(false); setAiKeyDraft(""); setAiKeyMessage("API key deleted.");
+    } catch (error) { setAiKeyMessage(String(error)); }
+    finally { setAiKeyLoading(false); }
+  };
   const [aiModels, setAiModels] = useState<Record<AiProvider, string>>(() => ({ollama: localStorage.getItem("openplatform:ai-model:ollama") || localStorage.getItem("openplatform:ai-model") || "", openrouter: localStorage.getItem("openplatform:ai-model:openrouter") || ""}));
   const [aiInput, setAiInput] = useState("");
-  const [aiConversations, setAiConversations] = useState<Record<AiProvider, AiMessage[]>>({ollama: [], openrouter: []});
-  const aiKey = aiKeys[aiProvider];
+  type AiConversation = {id: string; provider: AiProvider; createdAt: string; messages: AiMessage[]};
+  const [aiConversations, setAiConversations] = useState<AiConversation[]>(() => {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem("openplatform:ai-conversations") || "[]");
+      if (!Array.isArray(saved)) return [];
+      return saved.filter((item): item is AiConversation => item && typeof item.id === "string" && (item.provider === "ollama" || item.provider === "openrouter") && typeof item.createdAt === "string" && Number.isFinite(Date.parse(item.createdAt)) && Array.isArray(item.messages) && item.messages.every((message: AiMessage) => message && (message.role === "user" || message.role === "assistant") && typeof message.content === "string"));
+    } catch { return []; }
+  });
+  const [aiSelected, setAiSelected] = useState<string | null>(null);
+  const [aiStorageError, setAiStorageError] = useState("");
+  useEffect(() => {
+    try { localStorage.setItem("openplatform:ai-conversations", JSON.stringify(aiConversations)); setAiStorageError(""); }
+    catch { setAiStorageError("Unable to save conversations on this device."); }
+  }, [aiConversations]);
   const aiModel = aiModels[aiProvider];
-  const aiMessages = aiConversations[aiProvider];
+  const aiThreads = aiConversations.filter((thread) => thread.provider === aiProvider);
+  const aiThread = aiThreads.find((thread) => thread.id === aiSelected);
+  const aiMessages = aiThread?.messages || [];
   const providerName = aiProvider === "ollama" ? "Ollama Cloud" : "OpenRouter";
-  const setAiMessages = (messages: AiMessage[]) => setAiConversations((current) => ({...current, [aiProvider]: messages}));
+  const aiTimestamp = (date: string) => new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(date)).replace(",", "");
+  const deleteAiConversation = async (id: string) => {
+    if (aiBusy) return;
+    const accepted = await confirm("Delete this conversation? This cannot be undone.", { title: "Delete conversation", kind: "warning" });
+    if (!accepted) return;
+    setAiConversations((threads) => threads.filter((thread) => thread.id !== id));
+    if (aiSelected === id) { setAiSelected(null); setAiExpanded(null); }
+  };
   const [aiExpanded, setAiExpanded] = useState<number | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState("");
   const sendAi = async () => {
     const content = aiInput.trim();
     if (!content || aiBusy) return;
-    if (!aiKey.trim() || !aiModel.trim()) { setAiError("Add your API key and model in Settings."); setPanel("settings"); setPanelOpen(true); return; }
+    if (!aiKeySaved || !aiModel.trim()) { setAiError("Add your API key and model in Settings."); setPanel("settings"); setPanelOpen(true); return; }
     const messages = [...aiMessages, {role: "user" as const, content}];
-    setAiMessages(messages); setAiInput(""); setAiBusy(true); setAiError(""); setPanel("ai"); setPanelOpen(true);
+    const id = aiThread?.id ?? crypto.randomUUID();
+    const thread: AiConversation = aiThread ?? {id, provider: aiProvider, createdAt: new Date().toISOString(), messages: []};
+    const updateThread = (next: AiMessage[]) => setAiConversations((current) => {
+      const exists = current.some((item) => item.id === id);
+      return exists ? current.map((item) => item.id === id ? {...item, messages: next} : item) : [{...thread, messages: next}, ...current];
+    });
+    updateThread(messages); setAiSelected(id); setAiInput(""); setAiBusy(true); setAiError(""); setPanel("ai"); setPanelOpen(true);
     try {
-      const reply = await invoke<string>("ai_chat", {provider: aiProvider, apiKey: aiKey, model: aiModel, messages});
-      setAiMessages([...messages, {role: "assistant", content: reply}]); setAiExpanded(messages.length);
-    } catch (error) { setAiMessages(messages.slice(0, -1)); setAiInput(content); setAiError(String(error)); }
-    finally { setAiBusy(false); }
+      const reply = await invoke<string>("ai_chat", {provider: aiProvider, model: aiModel, messages});
+      updateThread([...messages, {role: "assistant", content: reply}]); setAiExpanded(messages.length);
+    } catch (error) {
+      if (aiThread) updateThread(aiMessages);
+      else { setAiConversations((current) => current.filter((item) => item.id !== id)); setAiSelected(null); }
+      setAiInput(content); setAiError(String(error));
+    } finally { setAiBusy(false); }
   };
   const [outline, setOutline] = useState<Symbol[]>([]);
   const [overlay, setOverlay] = useState<
@@ -2363,11 +2420,22 @@ export default function App() {
                   <div className="ai-panel">
                     <div className="ai-history-heading"><strong>{aiModel || "AI chat"}</strong><button onClick={() => { setPanel("settings"); setPanelOpen(true); }}>Settings</button></div>
                     <p className="ai-muted">{aiModel ? providerName + " · " + aiModel : "Connect a provider in Settings to start."}</p>
-                    {aiMessages.length === 0 && <p className="ai-muted">Your conversation will appear here.</p>}
-                    {aiMessages.map((message, index) => <button key={index} className="ai-history" onClick={() => setAiExpanded(aiExpanded === index ? null : index)} aria-expanded={aiExpanded === index}><span><strong>{message.role === "user" ? "You" : "Assistant"}</strong><small style={aiExpanded === index ? {whiteSpace: "pre-wrap", overflowWrap: "anywhere"} : undefined}>{message.content}</small></span></button>)}
+                    <div className="ai-thread-heading"><strong>Conversations</strong><button disabled={aiBusy} onClick={() => { setAiSelected(null); setAiExpanded(null); setAiError(""); setAiComposerOpen(true); }}><Icon name="plus" /> New</button></div>
+                    {aiThreads.length === 0 && <p className="ai-muted">Start a conversation to see it here.</p>}
+                    <div className="ai-thread-list">
+                      {aiThreads.map((thread) => <div key={thread.id} className={`ai-thread-row ${aiSelected === thread.id ? "selected" : ""}`}>
+                        <button className="ai-thread-select" disabled={aiBusy} onClick={() => { setAiSelected(thread.id); setAiExpanded(null); setAiError(""); setAiComposerOpen(true); }} aria-pressed={aiSelected === thread.id}>
+                          <strong>{thread.messages.find((message) => message.role === "user")?.content || "Conversation"}</strong><time dateTime={thread.createdAt}>{aiTimestamp(thread.createdAt)}</time>
+                        </button>
+                        <button className="icon-button ai-thread-delete" disabled={aiBusy} aria-label={`Delete conversation from ${aiTimestamp(thread.createdAt)}`} title="Delete conversation" onClick={() => void deleteAiConversation(thread.id)}><Icon name="trash" /></button>
+                      </div>)}
+                    </div>
+                    {aiThread && <div className="ai-thread-messages"><div className="ai-thread-heading"><strong>Conversation</strong><time dateTime={aiThread.createdAt}>{aiTimestamp(aiThread.createdAt)}</time></div>
+                      {aiMessages.map((message, index) => <button key={index} className="ai-history" onClick={() => setAiExpanded(aiExpanded === index ? null : index)} aria-expanded={aiExpanded === index}><span><strong>{message.role === "user" ? "You" : "Assistant"}</strong><small style={aiExpanded === index ? {whiteSpace: "pre-wrap", overflowWrap: "anywhere"} : undefined}>{message.content}</small></span></button>)}
+                    </div>}
                     {aiBusy && <p className="ai-muted">Thinking…</p>}
                     {aiError && <p className="ai-error" role="alert">{aiError}</p>}
-                    {aiMessages.length > 0 && <button disabled={aiBusy} onClick={() => { setAiMessages([]); setAiError(""); }}>New conversation</button>}
+                    {aiStorageError && <p className="ai-error" role="alert">{aiStorageError}</p>}
                   </div>
                 )}
                 {panel === "home" && (
@@ -2485,10 +2553,12 @@ export default function App() {
                     </div>
                     <div className="section-heading">AI assistant</div>
                     <div className="ai-settings">
-                      <label>Provider<select value={aiProvider} disabled={aiBusy} onChange={(e) => { const next = e.target.value as AiProvider; setAiProvider(next); localStorage.setItem("openplatform:ai-provider", next); setAiError(""); setAiExpanded(null); }}><option value="ollama">Ollama Cloud</option><option value="openrouter">OpenRouter</option></select></label>
+                      <label>Provider<select value={aiProvider} disabled={aiBusy || aiKeyLoading} onChange={(e) => { const next = e.target.value as AiProvider; setAiProvider(next); localStorage.setItem("openplatform:ai-provider", next); setAiError(""); setAiExpanded(null); setAiSelected(null); }}><option value="ollama">Ollama Cloud</option><option value="openrouter">OpenRouter</option></select></label>
                       <label>Model<input value={aiModel} placeholder={aiProvider === "ollama" ? "e.g. gemma4:31b" : "e.g. openrouter/free"} onChange={(e) => { const value = e.target.value; setAiModels((current) => ({...current, [aiProvider]: value})); localStorage.setItem(`openplatform:ai-model:${aiProvider}`, value); }} /></label>
-                      <label>API key<input type="password" value={aiKey} placeholder={`Enter your ${providerName} API key`} autoComplete="off" onChange={(e) => setAiKeys((current) => ({...current, [aiProvider]: e.target.value}))} /></label>
-                      <p>Keys are kept for this session only. Messages are sent to {providerName}.</p>
+                      <label>API key<input type="password" value={aiKeyDraft} placeholder={aiKeySaved ? "Saved in Keychain · enter to replace" : `Enter your ${providerName} API key`} autoComplete="off" onChange={(e) => setAiKeyDraft(e.target.value)} /></label>
+                      <div className="ai-key-actions"><button disabled={aiKeyLoading || aiBusy || !aiKeyDraft.trim()} onClick={() => void saveAiKey()}>Save key</button><button disabled={aiKeyLoading || aiBusy || !aiKeySaved} onClick={() => void deleteAiKey()}>Delete key</button></div>
+                      <p>{aiKeySaved ? "Key saved securely in macOS Keychain." : "Save your key securely in macOS Keychain."} Messages are sent to {providerName}.</p>
+                      {aiKeyMessage && <p role="status">{aiKeyMessage}</p>}
                     </div>
                     <AccountsSettings projectDir={projectDir} />
                     <div className="section-heading">Editor</div>

@@ -30,6 +30,9 @@ libc = "0.2"
 tempfile = "3"
 
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1
