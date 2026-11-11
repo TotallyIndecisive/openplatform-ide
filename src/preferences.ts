@@ -17,12 +17,16 @@ type Preferences = {
   minimap: boolean;
   wordWrap: boolean;
   dock: DockId[];
+  dockVisible: boolean;
+  tabsVisible: boolean;
 };
 const defaults: Preferences = {
   fontSize: 14,
   minimap: true,
   wordWrap: true,
   dock: dockItems.map((item) => item.id),
+  dockVisible: false,
+  tabsVisible: true,
 };
 export function usePreferences() {
   const [preferences, setPreferences] = useState<Preferences>(() => {
@@ -35,6 +39,8 @@ export function usePreferences() {
         fontSize: Math.max(11, Math.min(20, Number(saved.fontSize) || 14)),
         minimap: saved.minimap !== false,
         wordWrap: saved.wordWrap !== false,
+        dockVisible: typeof saved.dockVisible === "boolean" ? saved.dockVisible : true,
+        tabsVisible: saved.tabsVisible !== false,
         dock: Array.isArray(saved.dock)
           ? defaults.dock.filter((id) => saved.dock.includes(id) || (id === "ai" && !saved.aiDockConfigured))
           : defaults.dock,

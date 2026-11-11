@@ -85,6 +85,8 @@ export async function installNativeMenu(
           item("Project Files", "Panel: Show Files"),
           item("Outline", "Panel: Show Outline"),
           item("Toggle Sidebar", "Panel: Toggle Sidebar", "CmdOrCtrl+B"),
+          item("Toggle Floating Menu", "View: Toggle Floating Menu"),
+          item("Toggle Open Files Bar", "View: Toggle Open Files Bar"),
           item("Terminal", "Terminal: Toggle"),
           item("Build Output", "Output: Toggle"),
           item("Serial Monitor", "Panel: Show Serial Monitor"),

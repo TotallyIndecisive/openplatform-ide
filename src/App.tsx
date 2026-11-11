@@ -268,14 +268,18 @@ export default function App() {
     "idle" | "ok" | "err" | "cancelled"
   >("idle");
 
-  const [termOpen, setTermOpen] = useState(true);
-  const [rightOpen, setRightOpen] = useState(true);
+  const [termOpen, setTermOpen] = useState(false);
+  const [rightOpen, setRightOpen] = useState(false);
   const [rightTab, setRightTab] = useState<"serial" | "output" | "problems">(
     "serial",
   );
   const outOpen = rightOpen && rightTab === "output";
   const [bottomExpanded, setBottomExpanded] = useState(false);
   const [preferences, setPreferences] = usePreferences();
+  const toggleFloatingMenu = () => {
+    if (preferences.dockVisible) setPanelOpen(false);
+    setPreferences((current) => ({ ...current, dockVisible: !current.dockVisible }));
+  };
   const [branch, setBranch] = useState("");
   const [shellName, setShellName] = useState("shell");
   const refreshBranch = useCallback(async () => {
@@ -1168,6 +1172,8 @@ export default function App() {
         ["Panel: Show Outline", ""],
         ["Panel: Show Serial Monitor", ""],
         ["Panel: Toggle Sidebar", "⌘B"],
+        ["View: Toggle Floating Menu", ""],
+        ["View: Toggle Open Files Bar", ""],
         ["Build: Verify", ""],
         ["Build: Upload", ""],
         ["Build: Cancel", ""],
@@ -1253,7 +1259,9 @@ export default function App() {
       setRightTab("serial");
       setRightOpen(true);
     },
-    "Panel: Toggle Sidebar": () => setPanelOpen((v) => !v),
+    "Panel: Toggle Sidebar": toggleFloatingMenu,
+    "View: Toggle Floating Menu": toggleFloatingMenu,
+    "View: Toggle Open Files Bar": () => setPreferences((current) => ({...current, tabsVisible: !current.tabsVisible})),
     "Build: Verify": () => verify(),
     "Build: Upload": () => upload(),
     "Build: Cancel": () => cancelTask(),
@@ -1477,7 +1485,7 @@ export default function App() {
         if (activeRef.current) closeBuffer(activeRef.current);
       } else if (mod && e.key.toLowerCase() === "b") {
         e.preventDefault();
-        setPanelOpen((v) => !v);
+        actionsRef.current["Panel: Toggle Sidebar"]?.();
       } else if (e.ctrlKey && e.key === "`") {
         // Zed: ⌃` toggles the terminal panel.
         e.preventDefault();
@@ -1739,6 +1747,7 @@ export default function App() {
           )}
         </div>
         <div className="title-actions">
+          <button className="icon-button dock-toggle" title={preferences.dockVisible ? "Hide tool dock" : "Show tool dock"} aria-label={preferences.dockVisible ? "Hide tool dock" : "Show tool dock"} aria-pressed={preferences.dockVisible} onClick={toggleFloatingMenu}><Icon name="panel" /></button>
           <button className="quick-search" onClick={openFinder}>
             <Icon name="search" />
             <span>Go to file…</span>
@@ -1763,8 +1772,8 @@ export default function App() {
         </div>
       </header>
 
-      <main className="workspace">
-        <nav className="activity-bar" aria-label="Workspace dock">
+      <main className={`workspace ${preferences.dockVisible ? "" : "dock-hidden"}`}>
+        <nav className={`activity-bar ${preferences.dockVisible ? "" : "hidden"}`} aria-label="Workspace dock">
           {dockItems
             .filter((item) => preferences.dock.includes(item.id))
             .map((item) => (
@@ -1802,9 +1811,10 @@ export default function App() {
         </nav>
 
         <section
-          className={`workspace-main ${!projectDir || (!termOpen && !rightOpen) ? "no-bottom" : ""}`}
+          className={`workspace-main ${!projectDir || (!termOpen && !rightOpen) ? "no-bottom" : ""} ${preferences.tabsVisible ? "" : "tabs-collapsed"}`}
         >
-          <div className="tabs-region">
+          <div className={`tabs-region ${preferences.tabsVisible ? "" : "tabs-auto-reveal"}`}>
+            {!preferences.tabsVisible && <button className="tabs-reveal-handle" aria-label="Reveal open files" title="Reveal open files" />}
             <div className="tabbar" role="tablist" aria-label="Open files">
               {buffers.map((b) => (
                 <div

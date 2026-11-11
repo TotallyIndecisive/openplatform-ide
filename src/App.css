@@ -19,7 +19,7 @@
   --yellow: #a57b28;
   --mono: "SF Mono", SFMono-Regular, Menlo, monospace;
   --shadow: 0 2px 5px #30496506, 0 5px 15px #30496505;
-  --rail-space: 104px;
+  --rail-space: 72px;
 }
 * {
   box-sizing: border-box;
@@ -286,7 +286,7 @@ button.primary:hover:not(:disabled) {
   position: relative;
   flex: 1;
   min-height: 0;
-  padding: 7px 12px 10px var(--rail-space);
+  padding: 6px 6px 6px var(--rail-space);
 }
 .workspace-main {
   height: 100%;
@@ -296,7 +296,7 @@ button.primary:hover:not(:disabled) {
       175px,
       var(--bottom-height, 23%)
     );
-  gap: 8px;
+  gap: 6px;
 }
 .workspace-main.no-bottom {
   grid-template-rows: 33px minmax(0, 1fr);
@@ -544,7 +544,7 @@ button.primary:hover:not(:disabled) {
 /* The dock hugs its items. Tools can be removed in Settings. */
 .activity-bar {
   position: absolute;
-  left: 20px;
+  left: 6px;
   top: 50%;
   transform: translateY(-50%);
   z-index: 25;
@@ -626,7 +626,7 @@ button.primary:hover:not(:disabled) {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.06fr);
-  gap: 8px;
+  gap: 6px;
 }
 .bottom-windows.single {
   grid-template-columns: minmax(0, 1fr);
@@ -925,9 +925,9 @@ button.primary:hover:not(:disabled) {
 }
 .floating-panel {
   position: absolute;
-  left: 86px;
-  top: 48px;
-  bottom: 10px;
+  left: var(--rail-space);
+  top: 6px;
+  bottom: 6px;
   width: min(360px, calc(100vw - 110px));
   z-index: 20;
   display: flex;
@@ -1455,10 +1455,10 @@ button.primary:hover:not(:disabled) {
 }
 @media (max-width: 1180px) {
   :root {
-    --rail-space: 82px;
+    --rail-space: 72px;
   }
   .activity-bar {
-    left: 13px;
+    left: 6px;
   }
   .project-identity {
     left: 45%;
@@ -1499,7 +1499,7 @@ button.primary:hover:not(:disabled) {
     gap: 10px;
   }
   .floating-panel {
-    left: 73px;
+    left: var(--rail-space);
   }
 }
 @media (max-width: 960px) {
@@ -1709,3 +1709,18 @@ button:active:not(:disabled) { transform: scale(.97); }
 .ai-thread-delete { flex: none; margin-right: 5px; }
 .ai-thread-messages { margin-top: 14px; border-top: 1px solid #edf1f0; }
 .ai-key-actions { display: flex; gap: 8px; }
+
+/* Keep the editor flush with the same inset when the dock is hidden. */
+.workspace.dock-hidden { --rail-space: 6px; }
+.dock-toggle[aria-pressed="true"] { color: var(--accent); background: #eaf7f3; }
+
+/* A compact handle reveals the file bar without resizing the editor. */
+.workspace-main.tabs-collapsed { grid-template-rows: 8px minmax(0, 1fr) minmax(175px, var(--bottom-height, 23%)); gap: 4px; }
+.workspace-main.tabs-collapsed.no-bottom { grid-template-rows: 8px minmax(0, 1fr); }
+.tabs-auto-reveal { position: relative; z-index: 15; align-items: flex-start; pointer-events: none; }
+.tabs-auto-reveal .tabs-reveal-handle { pointer-events: auto; width: 64px; height: 8px; min-height: 0; border: 0; border-radius: 6px; background: #fff; box-shadow: 0 1px 4px #26364d20; padding: 0; }
+.tabs-auto-reveal .tabbar { position: absolute; top: 0; height: 33px; visibility: hidden; opacity: 0; pointer-events: none; transform: translateY(-5px) scale(.98); transition: opacity 160ms ease, transform 160ms ease, visibility 160ms; animation: none; }
+.tabs-auto-reveal:hover .tabbar, .tabs-auto-reveal:focus-within .tabbar { visibility: visible; opacity: 1; pointer-events: auto; transform: translateY(0) scale(1); }
+.tabs-auto-reveal:hover .tabs-reveal-handle, .tabs-auto-reveal:focus-within .tabs-reveal-handle { opacity: 0; }
+@media (max-height: 700px) { .workspace-main.tabs-collapsed { grid-template-rows: 8px minmax(0, 1fr) minmax(155px, var(--bottom-height, 23%)); } .workspace-main.tabs-collapsed.no-bottom { grid-template-rows: 8px minmax(0, 1fr); } }
+@media (prefers-reduced-motion: reduce) { .tabs-auto-reveal .tabbar { transition: none; } }
